@@ -21,7 +21,7 @@ var (
 func init() {
 	webdavClient = gowebdav.NewClient(WebdavServer, WebdavUser, WebdavPassword)
 	err := webdavClient.Connect()
-	if err == nil {
+	if err != nil {
 		panic(err)
 	}
 

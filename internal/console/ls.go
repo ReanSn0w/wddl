@@ -6,12 +6,8 @@ import (
 	"sort"
 )
 
-type LSConfig struct {
-	Path string
-}
-
-func (c *Console) LS(conf *LSConfig) error {
-	items, err := c.client.ReadDir(conf.Path)
+func (c *Console) LS(path string) error {
+	items, err := c.client.ReadDir(path)
 	if err != nil {
 		return err
 	}
@@ -45,9 +41,9 @@ func (c *Console) print(items ...fs.FileInfo) {
 }
 
 func (c *Console) printDirectory(dir fs.FileInfo) {
-	fmt.Printf("[D] %v (%v)", dir.Name(), dir.Mode())
+	fmt.Printf("[D] %v (%v)\n", dir.Name(), dir.Mode())
 }
 
 func (c *Console) printFile(item fs.FileInfo) {
-	fmt.Printf("[F] %v (%v | %v)", item.Name(), item.Size(), item.Mode())
+	fmt.Printf("[F] %v (%v | %v)\n", item.Name(), item.Size(), item.Mode())
 }
