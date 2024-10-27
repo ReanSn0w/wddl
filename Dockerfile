@@ -14,12 +14,13 @@ RUN \
 FROM scratch
 COPY --from=application /srv /srv
 
-ENV SERVER https://dav.yandex.ru
-ENV USER guest
-ENV PASSWORD guest
-ENV SYNC false
-ENV INPUT /
-ENV OUTPUT /data
+ENV SERVER=https://dav.yandex.ru
+ENV USER=guest
+ENV PASSWORD=
+ENV SYNC=false
+ENV INPUT=/
+ENV OUTPUT=/data
 
+VOLUME [ "/data" ]
 WORKDIR /srv
 ENTRYPOINT ["/srv/app"]
