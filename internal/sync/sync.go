@@ -168,7 +168,7 @@ func (s *Sync) filterDownloaded(files []fileForSync) []fileForSync {
 		}
 	}
 
-	return result, nil
+	return result
 }
 
 func (s *Sync) checkDownload(file fileForSync) error {
