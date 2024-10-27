@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"git.papkovda.ru/library/gokit/pkg/tool"
@@ -62,17 +63,26 @@ func (s *Sync) checkNewFiles() {
 		return
 	}
 
+	wg := sync.WaitGroup{}
+	wg.Add(len(files))
+
 	for i, file := range files {
 		s.log.Logf("[INFO] sync %v / %v files", i+1, len(files))
 
 		s.rl.Run(func() {
+			defer wg.Done()
+
 			err := s.downloadFile(file)
 			if err != nil {
 				s.log.Logf("[ERROR] download file err: %v", err)
+				return
 			}
+
+			s.log.Logf("[INFO] sync file: $v) %v complete", i+1, file.path)
 		})
 	}
 
+	wg.Wait()
 	s.log.Logf("[INFO] sync done")
 }
 
@@ -168,7 +178,7 @@ func (s *Sync) checkDownload(file fileForSync) error {
 }
 
 func (s *Sync) prepareFileDownlaod(path string) error {
-	localFile, err := os.Create(s.outputPath + path)
+	localFile, err := os.Create(s.outputPath + strings.TrimPrefix(path, s.inputPath))
 	if err != nil {
 		return err
 	}
