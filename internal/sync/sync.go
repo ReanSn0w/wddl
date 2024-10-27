@@ -40,7 +40,7 @@ func (s *Sync) Start(ctx context.Context, interval time.Duration) error {
 	}
 
 	s.loop = tool.NewLoop(s.checkNewFiles)
-	s.loop.Once()
+	// s.loop.Once()
 
 	go func() {
 		<-ctx.Done()
@@ -122,29 +122,36 @@ func (s *Sync) downloadFile(f fileForSync) error {
 }
 
 func (s *Sync) checkDirectory(current string, path string) error {
-	pathParts := strings.Split(path, "/")
+	pathParts := strings.Split(path[1:], "/")
 	if len(pathParts) == 1 {
 		return nil
 	}
 
-	dir, err := os.Stat(current + "/" + pathParts[0])
-	if os.IsNotExist(err) {
-		err = os.Mkdir(path+"/"+pathParts[0], 0666)
-	}
+	currentPath := current + "/" + pathParts[0]
 
-	if !dir.IsDir() {
-		return errors.New("is not directory")
+	dir, err := os.Stat(currentPath)
+	if os.IsNotExist(err) {
+		err = os.Mkdir(currentPath, 0666)
+		if err != nil {
+			return err
+		}
+
+		dir, err = os.Stat(currentPath)
 	}
 
 	if err != nil {
 		return err
 	}
 
+	if !dir.IsDir() {
+		return errors.New("is not directory")
+	}
+
 	return s.checkDirectory(path+"/"+pathParts[0], strings.Join(pathParts[1:], "/"))
 }
 
 func (s *Sync) checkDownload(file fileForSync) error {
-	f, err := os.Stat(file.path)
+	f, err := os.Stat(s.outputPath + file.path)
 	if err != nil {
 		return err
 	}
@@ -157,7 +164,7 @@ func (s *Sync) checkDownload(file fileForSync) error {
 }
 
 func (s *Sync) prepareFileDownlaod(path string) error {
-	localFile, err := os.Create(s.outputPath + "/" + path)
+	localFile, err := os.Create(s.outputPath + path)
 	if err != nil {
 		return err
 	}
