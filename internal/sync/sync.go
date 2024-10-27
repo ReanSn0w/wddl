@@ -173,7 +173,7 @@ func (s *Sync) filterDownloaded(files []fileForSync) []fileForSync {
 
 func (s *Sync) checkDownload(file fileForSync) error {
 	f, err := os.Stat(s.outputPath + strings.TrimPrefix(file.path, s.inputPath))
-	if os.IsExist(err) {
+	if os.IsNotExist(err) {
 		return nil
 	}
 
