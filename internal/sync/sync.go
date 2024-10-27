@@ -122,7 +122,7 @@ func (s *Sync) readDir(path string, recursive bool) ([]fileForSync, error) {
 }
 
 func (s *Sync) downloadFile(f fileForSync) error {
-	err := s.checkDirectory(s.outputPath, f.path)
+	err := s.checkDirectory(s.outputPath, strings.TrimPrefix(f.path, s.inputPath))
 	if err != nil {
 		return err
 	}
@@ -165,7 +165,7 @@ func (s *Sync) checkDirectory(current string, path string) error {
 }
 
 func (s *Sync) checkDownload(file fileForSync) error {
-	f, err := os.Stat(s.outputPath + file.path)
+	f, err := os.Stat(s.outputPath + strings.TrimPrefix(file.path, s.inputPath))
 	if err != nil {
 		return err
 	}
