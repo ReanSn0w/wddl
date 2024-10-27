@@ -15,13 +15,13 @@ var (
 	opts     = struct {
 		app.Debug
 
-		Server   string `short:"s" long:"server" env:"SERVER" default:"https://dav.yandex.ru" default:"webdav server"`
+		Server   string `short:"s" long:"server" env:"SERVER" default:"https://dav.yandex.ru" description:"webdav server"`
 		User     string `short:"u" long:"user" env:"USER" default:"guest" description:"webdav user"`
 		Password string `short:"p" long:"password" env:"PASSWORD" description:"webdav password"`
 
-		Input  string `short:"i" long:"input" description:"input path"`
-		Output string `short:"o" long:"output" description:"output path"`
-		Sync   bool   `long:"sync" description:"sync mode will delete local files when it deleted on remote webdav storage"`
+		Input  string `short:"i" long:"input" env:"INPUT" description:"input path"`
+		Output string `short:"o" long:"output" env:"OUTPUT" description:"output path"`
+		Sync   bool   `long:"sync" env:"SYNC" description:"sync mode will delete local files when it deleted on remote webdav storage"`
 	}{}
 )
 
@@ -36,7 +36,7 @@ func main() {
 	}
 
 	s := sync.New(app.Log(), wd, opts.Input, opts.Output)
-	s.Start(app.Context(), time.Minute*3)
+	s.Start(app.Context(), time.Second*10)
 	app.Add(func(ctx context.Context) {
 		s.Stop()
 	})
