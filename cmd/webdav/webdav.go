@@ -1,11 +1,12 @@
 package main
 
 import (
-	"errors"
+	"context"
 	"os"
+	"time"
 
 	"git.papkovda.ru/library/gokit/pkg/app"
-	"git.papkovda.ru/tools/webdav/internal/console"
+	"git.papkovda.ru/tools/webdav/internal/sync"
 	"github.com/studio-b12/gowebdav"
 )
 
@@ -16,19 +17,16 @@ var (
 
 		Server   string `short:"s" long:"server" env:"SERVER" default:"https://dav.yandex.ru" default:"webdav server"`
 		User     string `short:"u" long:"user" env:"USER" default:"guest" description:"webdav user"`
-		Password string `long:"password" env:"PASSWORD" description:"webdav password"`
+		Password string `short:"p" long:"password" env:"PASSWORD" description:"webdav password"`
 
-		Path   string `short:"p" long:"path" description:"directory path"`
-		Output string `short:"o" long:"output" description:"result output"`
+		Input  string `short:"i" long:"input" description:"input path"`
+		Output string `short:"o" long:"output" description:"output path"`
+		Sync   bool   `long:"sync" description:"sync mode will delete local files when it deleted on remote webdav storage"`
 	}{}
 )
 
 func main() {
-	app := app.New("Webdav Client", revision, &opts)
-	action := ""
-	if len(os.Args) > 1 {
-		action = os.Args[1]
-	}
+	app := app.New("Webdav Downloader", revision, &opts)
 
 	wd := gowebdav.NewClient(opts.Server, opts.User, opts.Password)
 	err := wd.Connect()
@@ -37,21 +35,11 @@ func main() {
 		os.Exit(2)
 	}
 
-	con := console.New(app.Context(), app.Log(), wd)
+	s := sync.New(app.Log(), wd, opts.Input, opts.Output)
+	s.Start(app.Context(), time.Minute*3)
+	app.Add(func(ctx context.Context) {
+		s.Stop()
+	})
 
-	{
-		switch action {
-		case "ls":
-			err = con.LS(opts.Path)
-		case "dl":
-			err = con.DL(opts.Path, opts.Output)
-		default:
-			err = errors.New("unknown case")
-		}
-	}
-
-	if err != nil {
-		app.Log().Logf("[ERROR] operation failed: %v", err)
-		os.Exit(2)
-	}
+	app.GS(time.Second * 10)
 }
