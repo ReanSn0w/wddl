@@ -5,6 +5,8 @@ ADD . /bundle
 
 WORKDIR /bundle
 
+RUN apk --no-cache add ca-certificates
+
 RUN \
     revision=${GITHUB_REF} && \
     echo "Building container. Revision: ${revision}" && \
@@ -12,6 +14,7 @@ RUN \
 
 # Финальная сборка образа
 FROM scratch
+COPY --from=application /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
 COPY --from=application /srv /srv
 
 ENV SERVER=https://dav.yandex.ru
