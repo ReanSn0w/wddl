@@ -62,7 +62,9 @@ func (s *Sync) checkNewFiles() {
 		return
 	}
 
-	for _, file := range files {
+	for i, file := range files {
+		s.log.Logf("[INFO] sync %v / %v files", i+1, len(files))
+
 		s.rl.Run(func() {
 			err := s.downloadFile(file)
 			if err != nil {
@@ -70,6 +72,8 @@ func (s *Sync) checkNewFiles() {
 			}
 		})
 	}
+
+	s.log.Logf("[INFO] sync done")
 }
 
 type fileForSync struct {
