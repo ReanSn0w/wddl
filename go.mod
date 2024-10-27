@@ -1,6 +1,6 @@
 module git.papkovda.ru/tools/webdav
 
-go 1.23.1
+go 1.22.0
 
 require (
 	git.papkovda.ru/library/gokit v0.0.0-20241024163157-1d81da72b81d
