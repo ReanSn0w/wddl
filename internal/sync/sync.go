@@ -65,12 +65,12 @@ func (s *Sync) checkNewFiles() {
 
 	wg := sync.WaitGroup{}
 	wg.Add(len(files))
+	files = s.filterDownloaded(files)
 
 	for i, file := range files {
-		s.log.Logf("[INFO] sync %v / %v files", i+1, len(files))
-
 		s.rl.Run(func() {
 			defer wg.Done()
+			s.log.Logf("[INFO] sync %v / %v files", i+1, len(files))
 
 			err := s.downloadFile(file)
 			if err != nil {
@@ -78,7 +78,7 @@ func (s *Sync) checkNewFiles() {
 				return
 			}
 
-			s.log.Logf("[INFO] sync file: $v) %v complete", i+1, file.path)
+			s.log.Logf("[INFO] sync file: %v) %v complete", i+1, file.path)
 		})
 	}
 
@@ -127,11 +127,6 @@ func (s *Sync) downloadFile(f fileForSync) error {
 		return err
 	}
 
-	err = s.checkDownload(f)
-	if err == nil {
-		return nil
-	}
-
 	return s.prepareFileDownlaod(f.path)
 }
 
@@ -164,8 +159,24 @@ func (s *Sync) checkDirectory(current string, path string) error {
 	return s.checkDirectory(path+"/"+pathParts[0], strings.Join(pathParts[1:], "/"))
 }
 
+func (s *Sync) filterDownloaded(files []fileForSync) []fileForSync {
+	result := []fileForSync{}
+
+	for _, file := range files {
+		if err := s.checkDownload(file); err == nil {
+			result = append(result, file)
+		}
+	}
+
+	return result, nil
+}
+
 func (s *Sync) checkDownload(file fileForSync) error {
 	f, err := os.Stat(s.outputPath + strings.TrimPrefix(file.path, s.inputPath))
+	if os.IsExist(err) {
+		return nil
+	}
+
 	if err != nil {
 		return err
 	}
