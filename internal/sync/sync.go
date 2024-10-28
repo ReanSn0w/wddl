@@ -66,16 +66,23 @@ func (s *Sync) checkNewFiles() {
 	wg := sync.WaitGroup{}
 	wg.Add(len(files))
 	files = s.filterDownloaded(files)
+	files = s.filerFilesByDirectory(files)
 
-	for i, file := range files {
+	filesLen := len(files)
+	filesIterator := 0
+
+	for _, file := range files {
+		filesIterator += 1
+		fileIndex := filesIterator
+
 		s.rl.Run(func() {
-			s.log.Logf("[INFO] sync %v / %v files", i+1, len(files))
+			s.log.Logf("[INFO] sync %v / %v files", fileIndex, filesLen)
 
-			err := s.downloadFile(file)
+			err := s.prepareFileDownlaod(file.path)
 			if err != nil {
 				s.log.Logf("[ERROR] download file err: %v", err)
 			} else {
-				s.log.Logf("[INFO] sync file: %v) %v complete", i+1, file.path)
+				s.log.Logf("[INFO] sync file: %v) %v complete", fileIndex, file.path)
 			}
 
 			wg.Done()
@@ -121,13 +128,19 @@ func (s *Sync) readDir(path string, recursive bool) ([]fileForSync, error) {
 	return files, nil
 }
 
-func (s *Sync) downloadFile(f fileForSync) error {
-	err := s.checkDirectory(s.outputPath, strings.TrimPrefix(f.path, s.inputPath))
-	if err != nil {
-		return err
+func (s *Sync) filerFilesByDirectory(files []fileForSync) []fileForSync {
+	result := []fileForSync{}
+
+	for _, f := range files {
+		err := s.checkDirectory(s.outputPath, strings.TrimPrefix(f.path, s.inputPath))
+		if err != nil {
+			s.log.Logf("[ERROR] error with checking file directory: %v", f.path)
+		} else {
+			result = append(result, f)
+		}
 	}
 
-	return s.prepareFileDownlaod(f.path)
+	return files
 }
 
 func (s *Sync) checkDirectory(current string, path string) error {
