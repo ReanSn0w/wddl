@@ -14,7 +14,7 @@ import (
 	"github.com/studio-b12/gowebdav"
 )
 
-func New(log lgr.L, client *gowebdav.Client, inputPath, outputPath string) *Sync {
+func New(log lgr.L, client *gowebdav.Client, parallelDownloads int, inputPath, outputPath string) *Sync {
 	return &Sync{
 		log:        log,
 		client:     client,
@@ -69,16 +69,16 @@ func (s *Sync) checkNewFiles() {
 
 	for i, file := range files {
 		s.rl.Run(func() {
-			defer wg.Done()
 			s.log.Logf("[INFO] sync %v / %v files", i+1, len(files))
 
 			err := s.downloadFile(file)
 			if err != nil {
 				s.log.Logf("[ERROR] download file err: %v", err)
-				return
+			} else {
+				s.log.Logf("[INFO] sync file: %v) %v complete", i+1, file.path)
 			}
 
-			s.log.Logf("[INFO] sync file: %v) %v complete", i+1, file.path)
+			wg.Done()
 		})
 	}
 
