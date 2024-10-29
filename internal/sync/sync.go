@@ -63,13 +63,13 @@ func (s *Sync) checkNewFiles() {
 		return
 	}
 
-	wg := sync.WaitGroup{}
-	wg.Add(len(files))
 	files = s.filterDownloaded(files)
 	files = s.filerFilesByDirectory(files)
 
 	filesLen := len(files)
 	filesIterator := 0
+	wg := sync.WaitGroup{}
+	wg.Add(filesLen)
 
 	for _, file := range files {
 		filesIterator += 1
@@ -140,7 +140,7 @@ func (s *Sync) filerFilesByDirectory(files []fileForSync) []fileForSync {
 		}
 	}
 
-	return files
+	return result
 }
 
 func (s *Sync) checkDirectory(current string, path string) error {
