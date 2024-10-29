@@ -90,7 +90,12 @@ func (s *Sync) checkNewFiles() {
 	}
 
 	wg.Wait()
-	s.log.Logf("[INFO] sync done")
+
+	if filesLen == 0 {
+		time.Sleep(time.Minute * 3)
+	} else {
+		s.log.Logf("[INFO] sync done")
+	}
 }
 
 type fileForSync struct {
