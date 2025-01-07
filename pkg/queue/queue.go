@@ -69,7 +69,7 @@ func (q *Queue) lifecycle(ctx context.Context) {
 	for {
 		select {
 		case <-done:
-			break
+			return
 		case <-timer.C:
 			q.printProgress()
 			timer.Reset(time.Minute)
