@@ -31,6 +31,12 @@ func checkFilePath(filepath string) error {
 	_, err := os.Stat(fileDir)
 	if os.IsNotExist(err) {
 		err = createDirectoryByPath(fileDir)
+		if os.IsExist(err) {
+			// Данное исключение исправляет проблему,
+			// когда несколько потоков пытаются одну и ту же
+			// папку, от этого в лог падает несколько сообщений
+			err = nil
+		}
 		if err != nil {
 			return err
 		}
@@ -51,7 +57,6 @@ func createDirectoryByPath(directoryPath string) error {
 		if err == nil {
 			err = os.Mkdir(directoryPath, 0777)
 			if err != nil {
-				lgr.Default().Logf("[TRACE] mkdir err is: %v", err)
 				return err
 			}
 
