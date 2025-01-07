@@ -17,7 +17,7 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: |
-            git.papkovda.ru/tools/webdav
+            ghcr.io/ReanSn0w/wddl
           tags: |
             type=ref,event=branch
             type=ref,event=pr
@@ -26,13 +26,11 @@ jobs:
       - name: Login to Regestry
         uses: docker/login-action@v2
         with:
-          registry: git.papkovda.ru
+          registry: ghcr.io
           username: reansnow
-          password: ${{ secrets.CRT }}
+          password: ${{ secrets.GHCR }}
       - name: Build and push
         uses: docker/build-push-action@v5
-        env:
-          GITHUB_REF: ${{ GITHUB_REF }}
         with:
           push: true
           context: .
