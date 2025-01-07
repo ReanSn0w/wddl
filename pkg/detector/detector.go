@@ -111,7 +111,7 @@ func (s *Detector) fullscan(path string, recursive bool) ([]*File, error) {
 func (d *Detector) checkFile(f *File) (bool, error) {
 	info, err := os.Stat(f.Dest)
 	if os.IsNotExist(err) {
-		lgr.Default().Logf("[ERROR] destination stat err: %v", err)
+		lgr.Default().Logf("[DEBUG] destination stat err: %v", err)
 		return true, nil
 	}
 
