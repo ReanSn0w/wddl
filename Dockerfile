@@ -20,9 +20,9 @@ COPY --from=application /srv /srv
 ENV SERVER=https://dav.yandex.ru
 ENV USER=guest
 ENV PASSWORD=
-ENV SYNC=false
 ENV INPUT=/
 ENV OUTPUT=/data
+ENV THREADS=4
 
 VOLUME [ "/data" ]
 WORKDIR /srv

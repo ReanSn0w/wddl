@@ -1,5 +1,5 @@
-git.papkovda.ru/library/gokit v0.0.0-20241024163157-1d81da72b81d h1:fpaWJRwWz5STwGubnt7yhg7nadQh3TXuRPB3+I5ixmE=
-git.papkovda.ru/library/gokit v0.0.0-20241024163157-1d81da72b81d/go.mod h1:8+Xz4HeZRvH2yW72ILn7oQLJq6//rNImjRFOfcrEiok=
+git.papkovda.ru/library/gokit v0.1.3 h1:Pn2LtgBvS+xM/cFhuCDvEz0N4UO3fj4smKKSAxXkiQo=
+git.papkovda.ru/library/gokit v0.1.3/go.mod h1:8+Xz4HeZRvH2yW72ILn7oQLJq6//rNImjRFOfcrEiok=
 github.com/davecgh/go-spew v1.1.1 h1:vj9j/u1bqnvCEfJOwUhtlOARqs3+rkHYY13jYWTU97c=
 github.com/davecgh/go-spew v1.1.1/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
 github.com/go-pkgz/lgr v0.11.1 h1:hXFhZcznehI6imLhEa379oMOKFz7TQUmisAqb3oLOSM=

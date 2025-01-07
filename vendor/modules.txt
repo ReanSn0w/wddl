@@ -1,4 +1,4 @@
-# git.papkovda.ru/library/gokit v0.0.0-20241024163157-1d81da72b81d
+# git.papkovda.ru/library/gokit v0.1.3
 ## explicit; go 1.22.0
 git.papkovda.ru/library/gokit/pkg/app
 git.papkovda.ru/library/gokit/pkg/tool
