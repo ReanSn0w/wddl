@@ -24,6 +24,7 @@ var (
 		Input   string `short:"i" long:"input" env:"INPUT" description:"input path"`
 		Output  string `short:"o" long:"output" env:"OUTPUT" description:"output path"`
 		Threads int    `long:"threads" env:"THREADS" default:"5" description:"parallel downloads"`
+		Timeout int    `long:"timeout" env:"TIMEOUT" default:"600" description:"rescan timeout"`
 	}{}
 )
 
@@ -44,7 +45,7 @@ func main() {
 			New(wd, q).
 			WithDestinationPath(opts.Output).
 			WithSourcePath(opts.Input).
-			Run(time.Minute * 10)
+			Run(time.Second * time.Duration(opts.Timeout))
 
 		app.Add(func(ctx context.Context) {
 			detectorLoop.Stop()

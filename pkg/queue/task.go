@@ -6,6 +6,7 @@ import (
 	"sync/atomic"
 
 	"git.papkovda.ru/tools/webdav/pkg/detector"
+	"git.papkovda.ru/tools/webdav/pkg/utils"
 )
 
 func newTask(file *detector.File) *Task {
@@ -29,7 +30,7 @@ func (i *Task) Open() (io.WriteCloser, error) {
 		i.writer = nil
 	}
 
-	file, err := os.OpenFile(i.File.Dest, os.O_CREATE|os.O_WRONLY, 0666)
+	file, err := utils.CreateFile(i.File.Dest)
 	if err != nil {
 		return nil, err
 	}

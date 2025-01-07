@@ -27,7 +27,7 @@ type Queue struct {
 
 func (q *Queue) Send(files ...*detector.File) {
 	q.mx.Lock()
-	defer q.mx.RUnlock()
+	defer q.mx.Unlock()
 
 	tasks := []*Task{}
 	for _, f := range files {
@@ -53,7 +53,7 @@ func (q *Queue) Stream() <-chan *Task {
 
 func (q *Queue) Done(id string, err error) {
 	q.mx.Lock()
-	defer q.mx.RUnlock()
+	defer q.mx.Unlock()
 
 	if err != nil {
 		lgr.Default().Logf("[ERROR] task %v error: %v", id, err)
