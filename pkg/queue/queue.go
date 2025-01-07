@@ -72,6 +72,7 @@ func (q *Queue) lifecycle(ctx context.Context) {
 			break
 		case <-timer.C:
 			q.printProgress()
+			timer.Reset(time.Minute)
 		}
 	}
 }

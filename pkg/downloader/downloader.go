@@ -42,7 +42,9 @@ func (d *Downloader) start(ctx context.Context, ch <-chan *queue.Task) {
 			lgr.Default().Logf("[INFO] downloader stopped: context ends.")
 			break
 		case item := <-ch:
-			go d.downloadItem(ctx, item)
+			d.limiter.Run(func() {
+				d.downloadItem(ctx, item)
+			})
 		}
 	}
 }
@@ -55,7 +57,7 @@ func (d *Downloader) downloadItem(ctx context.Context, task *queue.Task) {
 
 	err := d.downloadFile(task)
 	if err != nil {
-		lgr.Default().Logf("[ERROR] download file by task %v err: %v", task.ID, err)
+		lgr.Default().Logf("[ERROR] download file by task %v err: %v", task.ID(), err)
 	}
 
 	d.queue.Done(task.ID(), err)
@@ -64,13 +66,15 @@ func (d *Downloader) downloadItem(ctx context.Context, task *queue.Task) {
 func (d *Downloader) downloadFile(task *queue.Task) error {
 	file, err := task.Open()
 	if err != nil {
-		lgr.Default().Logf("[DEBUG] open file for task %v error: %v", task.ID, err)
+		lgr.Default().Logf("[DEBUG] open file for task %v error: %v", task.ID(), err)
 		return err
 	}
 
 	defer file.Close()
 
-	stream, err := d.client.ReadStream(task.File.Location())
+	location := task.File.Location()
+
+	stream, err := d.client.ReadStream(location)
 	if err != nil {
 		return err
 	}

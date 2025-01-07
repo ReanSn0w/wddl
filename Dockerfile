@@ -1,6 +1,6 @@
 FROM golang:1.22-alpine AS application
 
-ARG GITHUB_REF
+ARG TAG
 ADD . /bundle
 
 WORKDIR /bundle
@@ -8,7 +8,7 @@ WORKDIR /bundle
 RUN apk --no-cache add ca-certificates
 
 RUN \
-    revision=${GITHUB_REF} && \
+    revision=${TAG} && \
     echo "Building container. Revision: ${revision}" && \
     go build -ldflags "-X main.revision=${revision}" -o /srv/app ./cmd/webdav/main.go
 
