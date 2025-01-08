@@ -3,6 +3,7 @@ package utils
 import (
 	"bytes"
 	"fmt"
+	"sort"
 )
 
 func NewProgres(id string, progress float64) FileProgress {
@@ -23,6 +24,10 @@ func MakeProgressMessage(workFiles, maxFiles int, files ...FileProgress) string 
 	buf.WriteString(
 		fmt.Sprintf("Downloading: %v / %v", workFiles, maxFiles),
 	)
+
+	sort.Slice(files, func(i, j int) bool {
+		return files[i].Progress > files[j].Progress
+	})
 
 	for i, file := range files {
 		buf.WriteString(
