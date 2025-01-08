@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"git.papkovda.ru/tools/webdav/pkg/detector"
+	"git.papkovda.ru/tools/webdav/pkg/utils"
 	"github.com/go-pkgz/lgr"
 )
 
@@ -57,6 +58,8 @@ func (q *Queue) Done(id string, err error) {
 
 	if err != nil {
 		lgr.Default().Logf("[ERROR] task %v error: %v", id, err)
+	} else {
+		lgr.Default().Logf("[INFO] task %v complete", id)
 	}
 
 	delete(q.storage, id)
@@ -82,16 +85,16 @@ func (q *Queue) printProgress() {
 	defer q.mx.RUnlock()
 
 	var downloadingFiles int64
-	var toDownload int64
-	var downloaded int64
-	var percent float64
+
+	items := []utils.FileProgress{}
 
 	for _, t := range q.storage {
-		toDownload += t.File.Size
-
 		if progress := t.Progress(); progress > 0 {
 			downloadingFiles += 1
-			downloaded += progress
+			items = append(
+				items,
+				utils.NewProgres(t.ID(),
+					float64(progress)/(float64(t.File.Size)/100)))
 		}
 	}
 
@@ -100,7 +103,7 @@ func (q *Queue) printProgress() {
 		return
 	}
 
-	percent = float64(downloaded) / (float64(toDownload) / 100)
-	lgr.Default().Logf("[INFO] downloading [%v/%v] (%.2f%%)", downloadingFiles, len(q.storage), percent)
-	lgr.Default().Logf("[DEBUG] byte progress: %v / %v", downloaded, toDownload)
+	lgr.Default().Logf(
+		"[INFO] %v",
+		utils.MakeProgressMessage(int(downloadingFiles), len(q.storage), items...))
 }

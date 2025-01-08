@@ -51,9 +51,6 @@ func (d *Downloader) start(ctx context.Context, ch <-chan *queue.Task) {
 
 func (d *Downloader) downloadItem(ctx context.Context, task *queue.Task) {
 	lgr.Default().Logf("[DEBUG] task started. id: %v", task.ID())
-	defer func() {
-		lgr.Default().Logf("[INFO] task stopped. id: %v", task.ID())
-	}()
 
 	err := d.downloadFile(task)
 	if err != nil {
