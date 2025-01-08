@@ -1,0 +1,18 @@
+[
+  {
+    "label": "Run Application",
+    "adapter": "Delve",
+    "request": "launch",
+    "mode": "debug",
+    "cwd": "${ZED_WORKTREE_ROOT}",
+    "program": "./cmd/webdav",
+    "envFile": ".env",
+    "env": {
+      "DEBUG": "true",
+      "TEMP": "./test/tmp",
+      "OUTPUT": "./test/output",
+      "THREADS": "4",
+      "TIMEOUT": "3600",
+    },
+  },
+]

@@ -1,109 +1,200 @@
 package queue
 
 import (
+	"bytes"
 	"context"
-	"sync"
+	"encoding/json"
+	"fmt"
 	"time"
 
-	"git.papkovda.ru/tools/webdav/pkg/detector"
-	"git.papkovda.ru/tools/webdav/pkg/utils"
+	"github.com/ReanSn0w/wddl/pkg/engine"
+	"github.com/boltdb/bolt"
 	"github.com/go-pkgz/lgr"
 )
 
-func New(ctx context.Context) *Queue {
-	q := &Queue{
-		storage:    map[string]*Task{},
-		downstream: make(chan *Task),
+var (
+	queueBucket = []byte("queue")
+)
+
+func New(path string) (*Queue, error) {
+	db, err := bolt.Open(path, 0600, nil)
+	if err != nil {
+		return nil, err
 	}
 
-	go q.lifecycle(ctx)
-	return q
+	err = db.Update(func(tx *bolt.Tx) (err error) {
+		_, err = tx.CreateBucketIfNotExists(queueBucket)
+		if err != nil {
+			return err
+		}
+
+		return nil
+	})
+
+	if err != nil {
+		return nil, err
+	}
+
+	q := &Queue{
+		db: db,
+	}
+
+	return q, nil
 }
 
 type Queue struct {
-	mx         sync.RWMutex
-	downstream chan *Task
-	storage    map[string]*Task
+	db *bolt.DB
 }
 
-func (q *Queue) Send(files ...*detector.File) {
-	q.mx.Lock()
-	defer q.mx.Unlock()
-
-	tasks := []*Task{}
-	for _, f := range files {
-		if _, ok := q.storage[f.Name]; ok {
-			continue
+// Add - добавляет файл в очередь
+func (q *Queue) Add(file engine.File) error {
+	return q.db.Update(func(tx *bolt.Tx) error {
+		bucket, err := tx.CreateBucketIfNotExists(queueBucket)
+		if err != nil {
+			return err
 		}
 
-		task := newTask(f)
-		tasks = append(tasks, task)
-		q.storage[task.ID()] = task
-	}
+		key := []byte(fmt.Sprintf("%d", file.ID))
+
+		buf := new(bytes.Buffer)
+		err = json.NewEncoder(buf).Encode(file)
+		if err != nil {
+			return err
+		}
+
+		err = bucket.Put(key, buf.Bytes())
+		if err != nil {
+			return err
+		}
+
+		return nil
+	})
+}
+
+// Exists - проверяет наличие файла в очереди
+// в случае его отсутствия возвращает ошибку
+func (q *Queue) Exists(id string) error {
+	return q.db.View(func(tx *bolt.Tx) error {
+		bucket := tx.Bucket(queueBucket)
+		if bucket == nil {
+			return engine.ErrNotFound
+		}
+
+		key := []byte(id)
+		if bucket.Get(key) == nil {
+			return engine.ErrNotFound
+		}
+
+		return nil
+	})
+}
+
+// Len - возвращает количество файлов в очереди
+// в случае их отсутствия возвращает (0, nil)
+func (q *Queue) Len() (int, error) {
+	var (
+		count int
+		err   error
+	)
+
+	err = q.db.View(func(tx *bolt.Tx) error {
+		bucket := tx.Bucket(queueBucket)
+		if bucket == nil {
+			return engine.ErrNotFound
+		}
+
+		count = bucket.Stats().KeyN
+		return nil
+	})
+
+	return count, err
+}
+
+// List - возвращает список файлов из очереди
+// в случае случае их отсутсвия возвращает (nil, nil)
+func (q *Queue) List(filter func(f engine.File) error) ([]engine.File, error) {
+	var (
+		result []engine.File
+		err    error
+	)
+
+	err = q.db.View(func(tx *bolt.Tx) error {
+		bucket := tx.Bucket(queueBucket)
+		if bucket == nil {
+			return engine.ErrNotFound
+		}
+
+		c := bucket.Cursor()
+		for k, v := c.First(); k != nil; k, v = c.Next() {
+			var file engine.File
+			err := json.NewDecoder(bytes.NewReader(v)).Decode(&file)
+			if err != nil {
+				return err
+			}
+
+			if filter != nil {
+				if err := filter(file); err != nil {
+					return err
+				}
+			}
+
+			result = append(result, file)
+		}
+
+		return nil
+	})
+
+	return result, err
+}
+
+// Chan - возвращает канал с файлами из очереди
+// в случае их присутствия в очереди в противном случае породит go рутину
+// которая будет периодически опрашивать очередь на наличие новых файлов
+func (q *Queue) Chan(ctx context.Context, log lgr.L, filter func(f engine.File) error) <-chan engine.File {
+	ch := make(chan engine.File)
 
 	go func() {
-		for _, t := range tasks {
-			q.downstream <- t
+		defer close(ch)
+
+		ticker := time.NewTicker(time.Second * 3)
+
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				items, err := q.List(filter)
+				if err != nil {
+					log.Logf("[ERROR] listing files: %v", err)
+					continue
+				}
+
+				for _, item := range items {
+					ch <- item
+				}
+			default:
+				time.Sleep(time.Millisecond * 100)
+			}
 		}
 	}()
+
+	return ch
 }
 
-func (q *Queue) Stream() <-chan *Task {
-	return q.downstream
-}
-
-func (q *Queue) Done(id string, err error) {
-	q.mx.Lock()
-	defer q.mx.Unlock()
-
-	if err != nil {
-		lgr.Default().Logf("[ERROR] task %v error: %v", id, err)
-	} else {
-		lgr.Default().Logf("[INFO] task %v complete", id)
-	}
-
-	delete(q.storage, id)
-}
-
-func (q *Queue) lifecycle(ctx context.Context) {
-	timer := time.NewTimer(time.Minute)
-	done := ctx.Done()
-
-	for {
-		select {
-		case <-done:
-			return
-		case <-timer.C:
-			q.printProgress()
-			timer.Reset(time.Minute)
+// Delete - удаляет файл из очереди
+// в случае его присутствия в очереди
+func (q *Queue) Delete(id string) error {
+	return q.db.Update(func(tx *bolt.Tx) error {
+		bucket := tx.Bucket(queueBucket)
+		if bucket == nil {
+			return nil
 		}
-	}
-}
 
-func (q *Queue) printProgress() {
-	q.mx.RLock()
-	defer q.mx.RUnlock()
-
-	var downloadingFiles int64
-
-	items := []utils.FileProgress{}
-
-	for _, t := range q.storage {
-		if progress := t.Progress(); progress > 0 {
-			downloadingFiles += 1
-			items = append(
-				items,
-				utils.NewProgres(t.ID(),
-					float64(progress)/(float64(t.File.Size)/100)))
+		key := []byte(id)
+		if bucket.Get(key) == nil {
+			return nil
 		}
-	}
 
-	if downloadingFiles == 0 {
-		lgr.Default().Logf("[DEBUG] no tasks: waiting")
-		return
-	}
-
-	lgr.Default().Logf(
-		"[INFO] %v",
-		utils.MakeProgressMessage(int(downloadingFiles), len(q.storage), items...))
+		return bucket.Delete(key)
+	})
 }

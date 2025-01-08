@@ -22,5 +22,8 @@
 go.work
 
 **.DS_Store
-run.env
+.env
 Sync
+test
+__debug_*
+**.db

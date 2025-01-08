@@ -1,4 +1,4 @@
-FROM golang:1.22-alpine AS application
+FROM golang:1.24-alpine AS application
 
 ARG TAG
 ADD . /bundle
@@ -17,14 +17,16 @@ FROM scratch
 COPY --from=application /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
 COPY --from=application /srv /srv
 
-ENV SERVER=https://dav.yandex.ru
-ENV USER=guest
-ENV PASSWORD=guest
+ENV WEBDAV_SERVER=https://dav.yandex.ru
+ENV WEBDAV_USER=guest
+ENV WEBDAV_PASSWORD=guest
 ENV INPUT=/
-ENV OUTPUT=/data
+ENV TEMP=./tmp
+ENV OUTPUT=./data
 ENV THREADS=4
 ENV TIMEOUT=600
-
+ENV DB_FILE=./wddl.db
 VOLUME [ "/data" ]
+
 WORKDIR /srv
 ENTRYPOINT ["/srv/app"]
