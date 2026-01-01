@@ -1,109 +1,173 @@
 package queue
 
 import (
+	"bytes"
 	"context"
-	"sync"
-	"time"
+	"encoding/json"
 
-	"git.papkovda.ru/tools/webdav/pkg/detector"
-	"git.papkovda.ru/tools/webdav/pkg/utils"
-	"github.com/go-pkgz/lgr"
+	"github.com/ReanSn0w/wddl/pkg/engine"
+	"github.com/boltdb/bolt"
 )
 
-func New(ctx context.Context) *Queue {
-	q := &Queue{
-		storage:    map[string]*Task{},
-		downstream: make(chan *Task),
+var (
+	bucketName = []byte("queue")
+)
+
+func New(path string) (*Queue, error) {
+	db, err := bolt.Open(path, 0600, nil)
+	if err != nil {
+		return nil, err
 	}
 
-	go q.lifecycle(ctx)
-	return q
+	err = db.Update(func(tx *bolt.Tx) error {
+		_, err := tx.CreateBucketIfNotExists(bucketName)
+		if err != nil {
+			return err
+		}
+		return nil
+	})
+
+	if err != nil {
+		return nil, err
+	}
+
+	return &Queue{q: db}, nil
 }
 
 type Queue struct {
-	mx         sync.RWMutex
-	downstream chan *Task
-	storage    map[string]*Task
+	q *bolt.DB
 }
 
-func (q *Queue) Send(files ...*detector.File) {
-	q.mx.Lock()
-	defer q.mx.Unlock()
+func (q *Queue) Client() *bolt.DB {
+	return q.q
+}
 
-	tasks := []*Task{}
-	for _, f := range files {
-		if _, ok := q.storage[f.Name]; ok {
-			continue
+func (q *Queue) List(ctx context.Context, limit int, filter func(engine.File) bool) ([]engine.File, error) {
+	var files []engine.File
+
+	if err := q.q.View(func(tx *bolt.Tx) error {
+		b := tx.Bucket(bucketName)
+
+		c := b.Cursor()
+
+		for k, v := c.First(); k != nil && len(files) < limit; k, v = c.Next() {
+			var f engine.File
+			if err := json.Unmarshal(v, &f); err != nil {
+				return err
+			}
+
+			if filter(f) {
+				files = append(files, f)
+			}
 		}
 
-		task := newTask(f)
-		tasks = append(tasks, task)
-		q.storage[task.ID()] = task
+		return nil
+	}); err != nil {
+		return nil, err
 	}
 
-	go func() {
-		for _, t := range tasks {
-			q.downstream <- t
+	return files, nil
+}
+
+func (q *Queue) Upsert(ctx context.Context, f engine.File) error {
+	if err := q.q.Update(func(tx *bolt.Tx) error {
+		b := tx.Bucket(bucketName)
+		buffer := new(bytes.Buffer)
+
+		err := json.NewEncoder(buffer).Encode(f)
+		if err != nil {
+			return err
 		}
-	}()
-}
 
-func (q *Queue) Stream() <-chan *Task {
-	return q.downstream
-}
-
-func (q *Queue) Done(id string, err error) {
-	q.mx.Lock()
-	defer q.mx.Unlock()
-
-	if err != nil {
-		lgr.Default().Logf("[ERROR] task %v error: %v", id, err)
-	} else {
-		lgr.Default().Logf("[INFO] task %v complete", id)
-	}
-
-	delete(q.storage, id)
-}
-
-func (q *Queue) lifecycle(ctx context.Context) {
-	timer := time.NewTimer(time.Minute)
-	done := ctx.Done()
-
-	for {
-		select {
-		case <-done:
-			return
-		case <-timer.C:
-			q.printProgress()
-			timer.Reset(time.Minute)
+		err = b.Put([]byte(f.ID), buffer.Bytes())
+		if err != nil {
+			return err
 		}
+
+		return nil
+	}); err != nil {
+		return err
 	}
+
+	return nil
 }
 
-func (q *Queue) printProgress() {
-	q.mx.RLock()
-	defer q.mx.RUnlock()
+func (q *Queue) Get(ctx context.Context, id string) (*engine.File, error) {
+	var f engine.File
 
-	var downloadingFiles int64
+	if err := q.q.View(func(tx *bolt.Tx) error {
+		b := tx.Bucket(bucketName)
 
-	items := []utils.FileProgress{}
-
-	for _, t := range q.storage {
-		if progress := t.Progress(); progress > 0 {
-			downloadingFiles += 1
-			items = append(
-				items,
-				utils.NewProgres(t.ID(),
-					float64(progress)/(float64(t.File.Size)/100)))
+		v := b.Get([]byte(id))
+		if v == nil {
+			return engine.ErrNotFound
 		}
+
+		if err := json.Unmarshal(v, &f); err != nil {
+			return err
+		}
+
+		return nil
+	}); err != nil {
+		return nil, err
 	}
 
-	if downloadingFiles == 0 {
-		lgr.Default().Logf("[DEBUG] no tasks: waiting")
-		return
+	return &f, nil
+}
+
+func (q *Queue) MarkPartComplete(ctx context.Context, id string, part string) error {
+	if err := q.q.Update(func(tx *bolt.Tx) error {
+		b := tx.Bucket(bucketName)
+
+		v := b.Get([]byte(id))
+		if v == nil {
+			return engine.ErrNotFound
+		}
+
+		var f engine.File
+		if err := json.Unmarshal(v, &f); err != nil {
+			return err
+		}
+
+		for i, p := range f.Parts {
+			if p.ID == part {
+				f.Parts[i].Complete = true
+				f.CompleteParts++
+			}
+		}
+
+		buffer := new(bytes.Buffer)
+
+		err := json.NewEncoder(buffer).Encode(f)
+		if err != nil {
+			return err
+		}
+
+		err = b.Put([]byte(f.ID), buffer.Bytes())
+		if err != nil {
+			return err
+		}
+
+		return nil
+	}); err != nil {
+		return err
 	}
 
-	lgr.Default().Logf(
-		"[INFO] %v",
-		utils.MakeProgressMessage(int(downloadingFiles), len(q.storage), items...))
+	return nil
+}
+
+func (q *Queue) Delete(ctx context.Context, id string) error {
+	if err := q.q.Update(func(tx *bolt.Tx) error {
+		b := tx.Bucket(bucketName)
+
+		if err := b.Delete([]byte(id)); err != nil {
+			return err
+		}
+
+		return nil
+	}); err != nil {
+		return err
+	}
+
+	return nil
 }
