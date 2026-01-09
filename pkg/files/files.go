@@ -184,7 +184,7 @@ func (f *Files) completeFile(file engine.File) error {
 		}
 
 		newEntries := make([]os.DirEntry, 0, len(m))
-		for _, entry := range entries {
+		for _, entry := range m {
 			newEntries = append(newEntries, entry)
 		}
 
