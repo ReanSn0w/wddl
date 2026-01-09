@@ -62,7 +62,7 @@ func (e *Engine) scanNewFiles(ctx context.Context, duration time.Duration, input
 
 			for _, file := range files {
 				stat, err := os.Stat(file.Dest)
-				if err != nil && err != os.ErrNotExist {
+				if err != nil && os.IsNotExist(err) {
 					e.log.Logf("[ERROR] failed to stat file %s: %v", file.Name, err)
 					continue
 				}
