@@ -180,8 +180,8 @@ func (f *Files) completeFile(file engine.File) error {
 
 		if err1 != nil || err2 != nil {
 			panic(fmt.Sprintf(
-				"Invalid file name format: %s=%s , %s=%s",
-				entries[i].Name(), err1.Error(), entries[j].Name(), err2.Error()))
+				"Invalid file name format: %s=%v , %s=%v",
+				entries[i].Name(), err1, entries[j].Name(), err2))
 		}
 
 		return firstNumber < secondNumber
