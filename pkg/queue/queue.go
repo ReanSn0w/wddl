@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"fmt"
 	"time"
 
 	"github.com/ReanSn0w/wddl/pkg/engine"
@@ -54,7 +53,7 @@ func (q *Queue) Add(file engine.File) error {
 			return err
 		}
 
-		key := []byte(fmt.Sprintf("%d", file.ID))
+		key := []byte(file.ID)
 
 		buf := new(bytes.Buffer)
 		err = json.NewEncoder(buf).Encode(file)
