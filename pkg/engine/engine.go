@@ -67,8 +67,10 @@ func (e *Engine) scanNewFiles(ctx context.Context, duration time.Duration, input
 					continue
 				}
 
-				if stat.Size() == file.Size {
-					continue
+				if stat != nil {
+					if stat.Size() == file.Size {
+						continue
+					}
 				}
 
 				err = e.queue.Exists(file.ID)
