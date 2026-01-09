@@ -236,7 +236,7 @@ func (f *Files) completeFile(file engine.File) error {
 		return err
 	}
 
-	err = os.Rename(file.Temp+"/"+file.Name, file.Dest)
+	err = f.moveFile(file.Temp+"/"+file.Name, file.Dest)
 	if err != nil {
 		return err
 	}
@@ -247,4 +247,27 @@ func (f *Files) completeFile(file engine.File) error {
 	}
 
 	return nil
+}
+
+func (f *Files) moveFile(src, dst string) error {
+	srcFile, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer srcFile.Close()
+
+	dstFile, err := os.Create(dst)
+	if err != nil {
+		return err
+	}
+	defer dstFile.Close()
+
+	if _, err := io.Copy(dstFile, srcFile); err != nil {
+		dstFile.Close()
+		os.Remove(dst)
+		return err
+	}
+
+	dstFile.Close()
+	return os.Remove(src)
 }
