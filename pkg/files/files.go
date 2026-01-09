@@ -174,6 +174,23 @@ func (f *Files) completeFile(file engine.File) error {
 		return err
 	}
 
+	{
+		m := map[string]os.DirEntry{}
+
+		for index := range entries {
+			if strings.Contains(entries[index].Name(), ".part") {
+				m[entries[index].Name()] = entries[index]
+			}
+		}
+
+		newEntries := make([]os.DirEntry, 0, len(m))
+		for _, entry := range entries {
+			newEntries = append(newEntries, entry)
+		}
+
+		entries = newEntries
+	}
+
 	sort.Slice(entries, func(i, j int) bool {
 		firstNumber, err1 := strconv.Atoi(strings.TrimSuffix(entries[i].Name(), ".part"))
 		secondNumber, err2 := strconv.Atoi(strings.TrimSuffix(entries[j].Name(), ".part"))
