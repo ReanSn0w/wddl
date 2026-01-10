@@ -190,10 +190,18 @@ func (sd *SpeedData) AvgSpeed() int64 {
 			toClean = append(toClean, key)
 		}
 
+		var (
+			itemAvgSpeed   int64 = 0
+			itemItemsCount       = 0
+		)
+
 		for _, mark := range item.items {
-			avgSpeed += mark.Speed
-			itemsCount++
+			itemAvgSpeed += mark.Speed
+			itemItemsCount++
 		}
+
+		avgSpeed += itemAvgSpeed
+		itemsCount++
 	}
 
 	// Clean Stage
