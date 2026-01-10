@@ -109,6 +109,37 @@ func (q *Queue) Len() (int, error) {
 	return count, err
 }
 
+// Stat - возвращает статистику состояния очереди
+func (q *Queue) Stat() (*engine.Stat, error) {
+	var (
+		stat engine.Stat
+		err  error
+	)
+
+	err = q.db.View(func(tx *bolt.Tx) error {
+		bucket := tx.Bucket(queueBucket)
+		if bucket == nil {
+			return engine.ErrNotFound
+		}
+
+		c := bucket.Cursor()
+		for k, v := c.First(); k != nil; k, v = c.Next() {
+			var file engine.File
+			err := json.NewDecoder(bytes.NewReader(v)).Decode(&file)
+			if err != nil {
+				return err
+			}
+
+			stat.Files++
+			stat.FullSize += file.Size
+		}
+
+		return nil
+	})
+
+	return &stat, err
+}
+
 // List - возвращает список файлов из очереди
 // в случае случае их отсутсвия возвращает (nil, nil)
 func (q *Queue) List(filter func(f engine.File) error) ([]engine.File, error) {
@@ -133,7 +164,7 @@ func (q *Queue) List(filter func(f engine.File) error) ([]engine.File, error) {
 
 			if filter != nil {
 				if err := filter(file); err != nil {
-					return err
+					continue
 				}
 			}
 

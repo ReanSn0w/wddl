@@ -144,19 +144,28 @@ func (e *Engine) downloadFiles(ctx context.Context, pc chan<- Progress, limit in
 func (e *Engine) progressPrinter(ctx context.Context, items <-chan Progress) {
 	ticker := time.NewTicker(time.Minute * 15)
 
+	speedCounter := NewSpeedData()
+	items = speedCounter.MakeChan(items)
+
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			items, err := e.queue.Len()
+			avgSpeed := speedCounter.AvgSpeed()
+
+			stat, err := e.queue.Stat()
 			if err != nil {
 				e.log.Logf("[ERROR] failed to get queue length: %v", err)
 				continue
 			}
 
-			if items > 0 {
-				e.log.Logf("[INFO] current queue: %d files", items)
+			avgTime := stat.AvgTime(avgSpeed)
+
+			if stat.Files > 0 {
+				e.log.Logf(
+					"[INFO] avg speed %.2f KB/s ; estimate %v ; in queue %d files",
+					float64(avgSpeed)/1024, avgTime, stat.Files)
 			}
 		case progress := <-items:
 			e.log.Logf("[INFO] %s", progress.String())

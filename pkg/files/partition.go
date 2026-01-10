@@ -20,6 +20,14 @@ type PartitionWriteCloser struct {
 	lastSplitTime time.Time
 }
 
+func (p *PartitionWriteCloser) CurrentPart() *os.File {
+	return p.currentPart
+}
+
+func (p *PartitionWriteCloser) WritedBytes() int64 {
+	return p.writedBytes
+}
+
 func (p *PartitionWriteCloser) Write(data []byte) (int, error) {
 	totalWritten := 0
 	dataToWrite := data
