@@ -200,7 +200,7 @@ func (sd *SpeedData) AvgSpeed() int64 {
 			itemItemsCount++
 		}
 
-		avgSpeed += itemAvgSpeed
+		avgSpeed += itemAvgSpeed / int64(itemItemsCount)
 		itemsCount++
 	}
 
