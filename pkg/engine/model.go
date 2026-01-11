@@ -30,6 +30,12 @@ type Config struct {
 
 	// Интервал сканирования файлов
 	ScanEvery time.Duration
+
+	// Флаг удаления удаленных файлов
+	//
+	// Полезен в случае, если удаленный Storage следует чистить
+	// в автоматическом режиме
+	RemoveRemote bool
 }
 
 type Scanner interface {
@@ -38,6 +44,7 @@ type Scanner interface {
 
 type Downloader interface {
 	Download(pch chan<- Progress, file File) error
+	Delete(file File) error
 }
 
 type Queue interface {

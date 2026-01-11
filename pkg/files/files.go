@@ -23,6 +23,7 @@ const (
 type Webdav interface {
 	ReadDir(path string) ([]os.FileInfo, error)
 	ReadStreamRange(path string, offset int64, length int64) (io.ReadCloser, error)
+	Remove(path string) error
 }
 
 func New(client Webdav) *Files {
@@ -82,6 +83,10 @@ func (d *Files) Download(pch chan<- engine.Progress, file engine.File) error {
 	}
 
 	return nil
+}
+
+func (d *Files) Delete(file engine.File) error {
+	return d.client.Remove(file.Source)
 }
 
 func (f *Files) download(pch chan<- engine.Progress, file engine.File) error {

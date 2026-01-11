@@ -12,7 +12,22 @@
       "TEMP": "./test/tmp",
       "OUTPUT": "./test/output",
       "THREADS": "4",
-      "TIMEOUT": "3600",
+      "TIMEOUT": "60",
+    },
+  },
+  {
+    "label": "Clear Remote Storage",
+    "adapter": "Delve",
+    "request": "launch",
+    "mode": "debug",
+    "cwd": "${ZED_WORKTREE_ROOT}",
+    "program": "./cmd/webdav",
+    "envFile": ".env",
+    "env": {
+      "DEBUG": "true",
+      "OUTPUT": "/Volumes/Share/PikPak",
+      "INPUT": "/Sync",
+      "UTIL_CLEAR_REMOTE": "true",
     },
   },
 ]

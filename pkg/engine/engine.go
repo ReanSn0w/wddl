@@ -130,6 +130,13 @@ func (e *Engine) downloadFiles(ctx context.Context, pc chan<- Progress, limit in
 					if err != nil {
 						e.log.Logf("[ERROR] failed to delete file %s from queue: %v", file.Name, err)
 					}
+
+					if e.config.RemoveRemote {
+						err = e.downloader.Delete(file)
+						if err != nil {
+							e.log.Logf("[ERROR] failed to delete remote file %s from downloader: %v", file.Name, err)
+						}
+					}
 				}
 			}()
 		case <-ctx.Done():
