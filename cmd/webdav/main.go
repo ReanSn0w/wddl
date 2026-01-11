@@ -48,7 +48,7 @@ func main() {
 			TempPath:     opts.Temp,
 			Concurrency:  opts.Threads,
 			ScanEvery:    time.Second * time.Duration(opts.Timeout),
-			RemoveRemote: opts.Util.ClearRemote,
+			RemoveRemote: opts.ClearRemote,
 		}
 
 		wd := gowebdav.NewClient(opts.WebDav.Server, opts.WebDav.User, opts.WebDav.Password)
