@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"sync"
 	"time"
 
 	"github.com/go-pkgz/lgr"
@@ -16,6 +17,8 @@ func New(log lgr.L, conf Config, scanner Scanner, downloader Downloader, queue Q
 		queue:      queue,
 		scanner:    scanner,
 		downloader: downloader,
+		fileLocks:  make(map[string]bool),
+		lockMutex:  &sync.Mutex{},
 	}
 }
 
@@ -25,6 +28,8 @@ type Engine struct {
 	queue      Queue
 	scanner    Scanner
 	downloader Downloader
+	fileLocks  map[string]bool // Track locked files
+	lockMutex  *sync.Mutex     // Protect fileLocks map
 }
 
 func (e *Engine) Start(ctx context.Context) {
@@ -110,35 +115,45 @@ func (e *Engine) downloadFiles(ctx context.Context, pc chan<- Progress, limit in
 	for {
 		select {
 		case file := <-ch:
+			// Try to acquire file lock
+			if !e.acquireFileLock(file.ID) {
+				e.log.Logf("[WARN] file %s is already being downloaded, skipping", file.Name)
+				continue
+			}
+
 			limiter <- struct{}{}
 
-			go func() {
+			go func(f File) {
 				defer func() {
 					<-limiter
+					e.releaseFileLock(f.ID)
 				}()
 
-				err := e.filterTaskFromQueue(file.ID, file.Name, file.Dest, file.Size)
+				err := e.filterTaskFromQueue(f.ID, f.Name, f.Dest, f.Size)
 				if err != nil {
 					return
 				}
 
-				err = e.downloader.Download(pc, file)
+				e.log.Logf("[DEBUG] starting download of file %s (size: %d bytes)", f.Name, f.Size)
+
+				err = e.downloader.Download(pc, f)
 				if err != nil {
-					e.log.Logf("[ERROR] failed to download file %s: %v", file.Name, err)
+					e.log.Logf("[ERROR] failed to download file %s: %v", f.Name, err)
 				} else {
-					err = e.queue.Delete(file.ID)
+					e.log.Logf("[INFO] successfully downloaded file %s", f.Name)
+					err = e.queue.Delete(f.ID)
 					if err != nil {
-						e.log.Logf("[ERROR] failed to delete file %s from queue: %v", file.Name, err)
+						e.log.Logf("[ERROR] failed to delete file %s from queue: %v", f.Name, err)
 					}
 
 					if e.config.RemoveRemote {
-						err = e.downloader.Delete(file)
+						err = e.downloader.Delete(f)
 						if err != nil {
-							e.log.Logf("[ERROR] failed to delete remote file %s from downloader: %v", file.Name, err)
+							e.log.Logf("[ERROR] failed to delete remote file %s from downloader: %v", f.Name, err)
 						}
 					}
 				}
-			}()
+			}(file)
 		case <-ctx.Done():
 			return
 		default:
@@ -180,6 +195,25 @@ func (e *Engine) progressPrinter(ctx context.Context, items <-chan Progress) {
 			time.Sleep(time.Millisecond * 100)
 		}
 	}
+}
+
+func (e *Engine) acquireFileLock(fileID string) bool {
+	e.lockMutex.Lock()
+	defer e.lockMutex.Unlock()
+
+	if _, locked := e.fileLocks[fileID]; locked {
+		return false // File is already being downloaded
+	}
+
+	e.fileLocks[fileID] = true
+	return true
+}
+
+func (e *Engine) releaseFileLock(fileID string) {
+	e.lockMutex.Lock()
+	defer e.lockMutex.Unlock()
+
+	delete(e.fileLocks, fileID)
 }
 
 func (e *Engine) filterTaskFromQueue(fileid, filename, filepath string, filesize int64) error {

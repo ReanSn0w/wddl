@@ -58,8 +58,13 @@ func (p *PartitionWriteCloser) Write(data []byte) (int, error) {
 		totalWritten += n
 		dataToWrite = dataToWrite[toWrite:]
 
-		// Если текущая часть полная, закрываем её
+		// Если текущая часть полная, закрываем её и синхронизируем
 		if p.writedBytes == partitionSize {
+			// Sync to ensure data is written to disk
+			if err := p.currentPart.Sync(); err != nil {
+				p.currentPart.Close()
+				return totalWritten, err
+			}
 			if err := p.currentPart.Close(); err != nil {
 				return totalWritten, err
 			}
@@ -73,6 +78,12 @@ func (p *PartitionWriteCloser) Write(data []byte) (int, error) {
 func (p *PartitionWriteCloser) Close() error {
 	if p.currentPart == nil {
 		return nil
+	}
+
+	// Sync to ensure data is written to disk before closing
+	if err := p.currentPart.Sync(); err != nil {
+		p.currentPart.Close()
+		return err
 	}
 
 	err := p.currentPart.Close()
