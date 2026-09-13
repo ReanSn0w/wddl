@@ -1,0 +1,24 @@
+version: 1
+
+webdav:
+  server: https://example.invalid/dav
+  root: /Sync
+
+download:
+  destination: /data/download
+  temp: /data/tmp
+  workers: 4
+  scan_every: 10m
+  remove_remote: false
+
+queue:
+  file: /data/state/queue.json
+
+existing_files:
+  roots:
+    - /libraries/movies
+    - /libraries/archive
+  scan_every: 24h
+
+logging:
+  debug: false
