@@ -29,6 +29,12 @@ jobs:
       - name: Run vet
         run: go vet ./...
 
+      - name: Build native container image
+        run: docker build --build-arg TAG=${{ github.ref_name }} -t wddl:test .
+
+      - name: Check native container image
+        run: ./scripts/check-image.sh wddl:test
+
   publish:
     name: "Publish Container"
     if: startsWith(github.ref, 'refs/tags/v') || github.ref == 'refs/heads/main'
