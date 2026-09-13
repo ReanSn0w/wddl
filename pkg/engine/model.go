@@ -18,6 +18,13 @@ var (
 	ErrLocalFileNotFound = errors.New("local file not found")
 )
 
+type TaskState string
+
+const (
+	TaskReady     TaskState = "ready"
+	TaskSuspended TaskState = "suspended"
+)
+
 type Config struct {
 	// Путь к директории из которой будут скачиваться файлы
 	InputPath string
@@ -46,7 +53,7 @@ type Scanner interface {
 }
 
 type Downloader interface {
-	Download(pch chan<- Progress, file File) error
+	Download(ctx context.Context, pch chan<- Progress, file File) error
 	Delete(file File) error
 }
 
@@ -67,6 +74,7 @@ type Queue interface {
 	List(filter func(f File) error) ([]File, error)
 	Chan(ctx context.Context, log lgr.L, filter func(f File) error) <-chan File
 	Delete(id string) error
+	SetState(id string, state TaskState) (File, error)
 }
 
 type Stat struct {
@@ -93,6 +101,7 @@ func NewFile(conf Config, source string, size int64) File {
 		Dest:   conf.OutputPath + strings.TrimPrefix(source, conf.InputPath),
 		Temp:   filepath.Join(conf.TempPath, fileID),
 		Size:   size,
+		State:  TaskReady,
 	}
 }
 
@@ -114,6 +123,9 @@ type File struct {
 
 	// Размер файла в байтах
 	Size int64
+
+	// State controls whether the scheduler may start the task.
+	State TaskState
 }
 
 type Progress struct {
@@ -128,6 +140,15 @@ type Progress struct {
 
 	// Скорость загрузки файла в байтах в секунду
 	Speed int64
+}
+
+type ActiveDownload struct {
+	ID         string
+	Name       string
+	Size       int64
+	Downloaded int64
+	Percent    float64
+	Speed      int64
 }
 
 func (p *Progress) String() string {

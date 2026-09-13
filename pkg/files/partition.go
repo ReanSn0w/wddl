@@ -114,7 +114,10 @@ func (p *PartitionWriteCloser) makePartition() (err error) {
 	p.writedBytes = 0
 
 	if !p.lastSplitTime.IsZero() {
-		p.ProgressChan <- p.makeProgress()
+		select {
+		case p.ProgressChan <- p.makeProgress():
+		default:
+		}
 	}
 
 	p.lastSplitTime = time.Now()

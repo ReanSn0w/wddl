@@ -528,6 +528,32 @@ func TestConcurrentAccess(t *testing.T) {
 	wg.Wait()
 }
 
+func TestSetStatePersistsAndSuspendedTaskIsNotEmitted(t *testing.T) {
+	q, path := newTestQueue(t)
+	file := testFile("paused", 42)
+	if err := q.Add(file); err != nil {
+		t.Fatal(err)
+	}
+	updated, err := q.SetState(file.ID, engine.TaskSuspended)
+	if err != nil || updated.State != engine.TaskSuspended {
+		t.Fatalf("SetState() = %#v, %v", updated, err)
+	}
+
+	reloaded, err := New(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	items, err := reloaded.List(nil)
+	if err != nil || len(items) != 1 || items[0].State != engine.TaskSuspended {
+		t.Fatalf("reloaded = %#v, %v", items, err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
+	defer cancel()
+	if item, ok := <-reloaded.Chan(ctx, lgr.New(), nil); ok {
+		t.Fatalf("suspended item emitted: %#v", item)
+	}
+}
+
 func newTestQueue(t *testing.T) (*Queue, string) {
 	t.Helper()
 
@@ -548,6 +574,7 @@ func testFile(id string, size int64) engine.File {
 		Temp:   "/tmp/" + id,
 		Dest:   "/downloads/" + id + ".mkv",
 		Size:   size,
+		State:  engine.TaskReady,
 	}
 }
 
@@ -559,6 +586,7 @@ func persistedFromEngine(file engine.File) persistedFile {
 		Temp:   file.Temp,
 		Dest:   file.Dest,
 		Size:   file.Size,
+		State:  string(file.State),
 	}
 }
 

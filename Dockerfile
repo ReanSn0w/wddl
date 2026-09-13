@@ -24,3 +24,4 @@ VOLUME [ "/data" ]
 
 WORKDIR /srv
 ENTRYPOINT ["/srv/app"]
+CMD ["run"]

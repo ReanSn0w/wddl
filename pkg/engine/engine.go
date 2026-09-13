@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"sync"
 	"time"
 
@@ -19,6 +20,8 @@ func New(log lgr.L, conf Config, scanner Scanner, downloader Downloader, queue Q
 		downloader:    downloader,
 		existingFiles: existingFiles,
 		fileLocks:     make(map[string]bool),
+		active:        make(map[string]ActiveDownload),
+		cancels:       make(map[string]context.CancelFunc),
 		lockMutex:     &sync.Mutex{},
 	}
 }
@@ -31,41 +34,50 @@ type Engine struct {
 	downloader    Downloader
 	existingFiles ExistingFileFinder
 	fileLocks     map[string]bool // Track locked files
-	lockMutex     *sync.Mutex     // Protect fileLocks map
+	active        map[string]ActiveDownload
+	cancels       map[string]context.CancelFunc
+	eventSink     func(string, File, any)
+	deleteMutex   *sync.Mutex
+	lockMutex     *sync.Mutex // Protect runtime maps
+	loopsWG       sync.WaitGroup
+	tasksWG       sync.WaitGroup
+}
+
+func (e *Engine) SetEventSink(sink func(string, File, any)) { e.eventSink = sink }
+func (e *Engine) SetDeleteMutex(mutex *sync.Mutex)          { e.deleteMutex = mutex }
+
+func (e *Engine) publish(eventType string, file File, data any) {
+	if e.eventSink != nil {
+		e.eventSink(eventType, file, data)
+	}
 }
 
 func (e *Engine) Start(ctx context.Context) {
 	progressCH := make(chan Progress, e.config.Concurrency)
 
-	// Запуск рутины для добавления новых файлов в очередь загрузки
-	go e.scanNewFiles(ctx, e.config.ScanEvery, e.config.InputPath)
-
 	// Запуск воркеров для загрузки файлов
-	go e.downloadFiles(ctx, progressCH, e.config.Concurrency)
+	e.loopsWG.Add(2)
+	go func() { defer e.loopsWG.Done(); e.downloadFiles(ctx, progressCH, e.config.Concurrency) }()
 
 	// Запуск рутины отслеживания прогресса загрузки файлов
-	go e.progressPrinter(ctx, progressCH)
+	go func() { defer e.loopsWG.Done(); e.progressPrinter(ctx, progressCH) }()
 }
 
-// Данный метод переодически запускает сканирование новых файлов в удаленном хранилище
-func (e *Engine) scanNewFiles(ctx context.Context, duration time.Duration, inputPath string) {
-	ticker := time.NewTicker(duration)
-	defer ticker.Stop()
-	e.log.Logf("[DEBUG] scan loop started")
-
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			e.log.Logf("[DEBUG] scan started")
-			if err := e.scanNewFilesOnce(inputPath); err != nil {
-				e.log.Logf("[ERROR] failed to scan files: %v", err)
-			}
-		default:
-			time.Sleep(time.Millisecond * 100)
-		}
+func (e *Engine) Wait(ctx context.Context) error {
+	done := make(chan struct{})
+	go func() { e.loopsWG.Wait(); e.tasksWG.Wait(); close(done) }()
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
 	}
+}
+
+// ScanNow performs one synchronous remote scan. Long-lived callers should use
+// this method as the single entry point for both scheduled and manual scans.
+func (e *Engine) ScanNow() error {
+	return e.scanNewFilesOnce(e.config.InputPath)
 }
 
 func (e *Engine) scanNewFilesOnce(inputPath string) error {
@@ -99,6 +111,8 @@ func (e *Engine) scanNewFilesOnce(inputPath string) error {
 			e.log.Logf("[DEBUG] file %s not found in queue", file.Name)
 			if err := e.queue.Add(file); err != nil {
 				e.log.Logf("[ERROR] failed to add file %s to queue: %v", file.Name, err)
+			} else {
+				e.publish("queue.added", file, nil)
 			}
 		default:
 			e.log.Logf("[ERROR] failed to check file %s in queue: %v", file.Name, err)
@@ -126,26 +140,47 @@ func (e *Engine) downloadFiles(ctx context.Context, pc chan<- Progress, limit in
 				continue
 			}
 
-			limiter <- struct{}{}
+			select {
+			case limiter <- struct{}{}:
+			case <-ctx.Done():
+				e.releaseFileLock(file.ID)
+				return
+			}
 
+			e.tasksWG.Add(1)
 			go func(f File) {
 				defer func() {
+					e.endActive(f.ID)
 					<-limiter
 					e.releaseFileLock(f.ID)
+					e.tasksWG.Done()
 				}()
 
 				err := e.filterTaskFromQueue(f)
 				if err != nil {
 					return
 				}
+				downloadCtx, cancel := context.WithCancel(ctx)
+				e.beginActive(f, cancel)
+				e.publish("download.started", f, nil)
 
 				e.log.Logf("[DEBUG] starting download of file %s (size: %d bytes)", f.Name, f.Size)
 
-				err = e.downloader.Download(pc, f)
+				err = e.downloader.Download(downloadCtx, pc, f)
 				if err != nil {
-					e.log.Logf("[ERROR] failed to download file %s: %v", f.Name, err)
+					if errors.Is(err, context.Canceled) {
+						if _, stateErr := e.queue.SetState(f.ID, TaskSuspended); stateErr != nil {
+							e.log.Logf("[ERROR] suspend cancelled download %s: %v", f.Name, stateErr)
+						}
+						e.log.Logf("[INFO] download cancelled for %s", f.Name)
+						e.publish("download.cancelled", f, nil)
+					} else {
+						e.log.Logf("[ERROR] failed to download file %s: %v", f.Name, err)
+						e.publish("download.failed", f, map[string]string{"error": err.Error()})
+					}
 				} else {
 					e.log.Logf("[INFO] successfully downloaded file %s", f.Name)
+					e.publish("download.completed", f, nil)
 					err = e.queue.Delete(f.ID)
 					if err != nil {
 						e.log.Logf("[ERROR] failed to delete file %s from queue: %v", f.Name, err)
@@ -194,11 +229,59 @@ func (e *Engine) progressPrinter(ctx context.Context, items <-chan Progress) {
 					float64(avgSpeed)/1024, avgTime, stat.Files)
 			}
 		case progress := <-items:
-			e.log.Logf("[INFO] %s", progress.String())
+			e.updateProgress(progress)
+			e.publish("download.progress", File{ID: progress.ID, Name: progress.Name}, progress)
 		default:
 			time.Sleep(time.Millisecond * 100)
 		}
 	}
+}
+
+func (e *Engine) beginActive(file File, cancel context.CancelFunc) {
+	e.lockMutex.Lock()
+	e.active[file.ID] = ActiveDownload{ID: file.ID, Name: file.Name, Size: file.Size}
+	e.cancels[file.ID] = cancel
+	e.lockMutex.Unlock()
+}
+
+func (e *Engine) updateProgress(progress Progress) {
+	e.lockMutex.Lock()
+	active, ok := e.active[progress.ID]
+	if ok {
+		active.Percent = progress.Percent
+		active.Speed = progress.Speed
+		active.Downloaded = int64(float64(active.Size) * progress.Percent / 100)
+		e.active[progress.ID] = active
+	}
+	e.lockMutex.Unlock()
+}
+
+func (e *Engine) endActive(id string) {
+	e.lockMutex.Lock()
+	delete(e.active, id)
+	delete(e.cancels, id)
+	e.lockMutex.Unlock()
+}
+
+func (e *Engine) CancelDownload(id string) bool {
+	e.lockMutex.Lock()
+	cancel, ok := e.cancels[id]
+	e.lockMutex.Unlock()
+	if ok {
+		cancel()
+	}
+	return ok
+}
+
+func (e *Engine) ActiveDownloads() []ActiveDownload {
+	e.lockMutex.Lock()
+	defer e.lockMutex.Unlock()
+	result := make([]ActiveDownload, 0, len(e.active))
+	for _, active := range e.active {
+		result = append(result, active)
+	}
+	sort.Slice(result, func(i, j int) bool { return result[i].ID < result[j].ID })
+	return result
 }
 
 func (e *Engine) acquireFileLock(fileID string) bool {
@@ -249,6 +332,10 @@ func (e *Engine) findLocalFile(file File) (string, error) {
 }
 
 func (e *Engine) deleteRemoteIfConfirmed(file File) error {
+	if e.deleteMutex != nil {
+		e.deleteMutex.Lock()
+		defer e.deleteMutex.Unlock()
+	}
 	if _, err := e.findLocalFile(file); err != nil {
 		if errors.Is(err, ErrLocalFileNotFound) {
 			return errors.New("local copy is no longer available")

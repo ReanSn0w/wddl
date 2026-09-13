@@ -77,6 +77,8 @@ func validateFile(file engine.File) error {
 		return errors.New("dest is required")
 	case file.Size < 0:
 		return errors.New("size must not be negative")
+	case file.State != engine.TaskReady && file.State != engine.TaskSuspended:
+		return fmt.Errorf("unknown state %q", file.State)
 	default:
 		return nil
 	}

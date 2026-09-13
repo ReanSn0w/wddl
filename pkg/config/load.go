@@ -63,6 +63,11 @@ func Defaults() Config {
 			Roots:     []string{},
 			ScanEvery: Duration(24 * time.Hour),
 		},
+		Control: Control{
+			Socket:          "/run/wddl/wddl.sock",
+			RequestTimeout:  Duration(30 * time.Second),
+			ShutdownTimeout: Duration(10 * time.Second),
+		},
 	}
 }
 

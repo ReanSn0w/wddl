@@ -3,11 +3,11 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/ReanSn0w/wddl/pkg/config"
-	"github.com/umputun/go-flags"
 )
 
 func TestConfigPathPriority(t *testing.T) {
@@ -37,15 +37,53 @@ func TestConfigPathPriority(t *testing.T) {
 			} else {
 				t.Setenv("WDDL_CONFIG", tt.env)
 			}
-			var got bootstrapOptions
-			parser := flags.NewParser(&got, flags.None)
-			if _, err := parser.ParseArgs(tt.args); err != nil {
+			args := append(tt.args, "version")
+			got, err := parseCLI(args)
+			if err != nil {
 				t.Fatalf("ParseArgs() error = %v", err)
 			}
-			if got.ConfigPath != tt.want {
-				t.Fatalf("ConfigPath = %q, want %q", got.ConfigPath, tt.want)
+			if got.Options.ConfigPath != tt.want {
+				t.Fatalf("ConfigPath = %q, want %q", got.Options.ConfigPath, tt.want)
 			}
 		})
+	}
+}
+
+func TestCommandTree(t *testing.T) {
+	tests := map[string]string{
+		"run":                          "run",
+		"status --json":                "status",
+		"watch":                        "watch",
+		"scan remote":                  "scan remote",
+		"scan local":                   "scan local",
+		"scan all":                     "scan all",
+		"queue list":                   "queue list",
+		"queue remove abc":             "queue remove",
+		"queue retry abc":              "queue retry",
+		"download cancel abc":          "download cancel",
+		"id /Sync/movie.mkv":           "id",
+		"cleanup remote":               "cleanup remote",
+		"cleanup remote --confirm abc": "cleanup remote",
+		"config validate":              "config validate",
+		"config reload":                "config reload",
+		"version":                      "version",
+	}
+	for args, want := range tests {
+		got, err := parseCLI(strings.Fields(args))
+		if err != nil {
+			t.Fatalf("parseCLI(%q) error = %v", args, err)
+		}
+		if got.Command != want {
+			t.Fatalf("parseCLI(%q).Command = %q, want %q", args, got.Command, want)
+		}
+	}
+}
+
+func TestCommandRequiredAndUnknownRejected(t *testing.T) {
+	for _, args := range [][]string{nil, {"unknown"}, {"status", "--unknown"}} {
+		if _, err := parseCLI(args); err == nil {
+			t.Fatalf("parseCLI(%q) error = nil", args)
+		}
 	}
 }
 

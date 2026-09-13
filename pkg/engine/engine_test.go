@@ -127,6 +127,39 @@ func TestFindLocalCopyUsesExpectedDestinationWithoutFinder(t *testing.T) {
 	}
 }
 
+func TestCancelDownloadSuspendsTask(t *testing.T) {
+	file := File{ID: "cancel-me", Name: "movie.mkv", Source: "/remote/movie.mkv", Dest: filepath.Join(t.TempDir(), "movie.mkv"), Temp: t.TempDir(), Size: 100, State: TaskReady}
+	items := make(chan File, 1)
+	items <- file
+	queue := newFakeQueue()
+	queue.files[file.ID] = file
+	queue.items = items
+	downloader := &blockingDownloader{started: make(chan struct{})}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	downloaderEngine := New(lgr.New(), Config{Concurrency: 1}, fakeScanner{}, downloader, queue, nil)
+	downloaderEngine.Start(ctx)
+	select {
+	case <-downloader.started:
+	case <-time.After(time.Second):
+		t.Fatal("download did not start")
+	}
+	if !downloaderEngine.CancelDownload(file.ID) {
+		t.Fatal("CancelDownload() = false")
+	}
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		queue.mu.Lock()
+		state := queue.files[file.ID].State
+		queue.mu.Unlock()
+		if state == TaskSuspended {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatal("cancelled task was not suspended")
+}
+
 func localMatch(t *testing.T) (File, ExistingFileFinder) {
 	t.Helper()
 	dir := t.TempDir()
@@ -160,7 +193,17 @@ type fakeDownloader struct {
 	deleteErr     error
 }
 
-func (d *fakeDownloader) Download(chan<- Progress, File) error {
+type blockingDownloader struct{ started chan struct{} }
+
+func (d *blockingDownloader) Download(ctx context.Context, _ chan<- Progress, _ File) error {
+	close(d.started)
+	<-ctx.Done()
+	return ctx.Err()
+}
+
+func (d *blockingDownloader) Delete(File) error { return nil }
+
+func (d *fakeDownloader) Download(context.Context, chan<- Progress, File) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.downloadCount++
@@ -258,4 +301,16 @@ func (q *fakeQueue) Delete(id string) error {
 	default:
 	}
 	return nil
+}
+
+func (q *fakeQueue) SetState(id string, state TaskState) (File, error) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	file, ok := q.files[id]
+	if !ok {
+		return File{}, ErrNotFound
+	}
+	file.State = state
+	q.files[id] = file
+	return file, nil
 }
