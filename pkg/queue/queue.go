@@ -20,8 +20,9 @@ func New(path string) (*Queue, error) {
 	}
 
 	return &Queue{
-		path:  path,
-		items: items,
+		path:          path,
+		items:         items,
+		writeSnapshot: writeSnapshot,
 	}, nil
 }
 
@@ -30,6 +31,8 @@ type Queue struct {
 
 	mx    sync.RWMutex
 	items map[string]engine.File
+
+	writeSnapshot snapshotWriter
 }
 
 // Add - добавляет файл в очередь
@@ -37,7 +40,16 @@ func (q *Queue) Add(file engine.File) error {
 	q.mx.Lock()
 	defer q.mx.Unlock()
 
-	q.items[file.ID] = file
+	next := cloneItems(q.items)
+	next[file.ID] = file
+
+	committed, err := q.writeSnapshot(q.path, next)
+	if committed {
+		q.items = next
+	}
+	if err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -139,6 +151,19 @@ func (q *Queue) Delete(id string) error {
 	q.mx.Lock()
 	defer q.mx.Unlock()
 
-	delete(q.items, id)
+	if _, exists := q.items[id]; !exists {
+		return nil
+	}
+
+	next := cloneItems(q.items)
+	delete(next, id)
+
+	committed, err := q.writeSnapshot(q.path, next)
+	if committed {
+		q.items = next
+	}
+	if err != nil {
+		return err
+	}
 	return nil
 }
