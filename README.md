@@ -20,10 +20,12 @@ MyPikPak.
 - `queue.file`;
 - `existing_files.roots`, `existing_files.scan_every`;
 - `logging.debug`.
+- `control.socket`, `control.request_timeout`, `control.shutdown_timeout`.
 
 Значения интервалов используют синтаксис Go duration: `30s`, `10m`, `24h`.
 Если поле не задано, применяются значения `/`, `./download`, `/tmp/wddl`, `4`,
-`10m`, `false`, `./queue.json`, пустой список библиотек, `24h` и `false`
+`10m`, `false`, `./queue.json`, пустой список библиотек, `24h`, `false`,
+`/run/wddl/wddl.sock`, `30s` и `10s`
 соответственно. `version`, `webdav.server`, `WEBDAV_USER` и
 `WEBDAV_PASSWORD` обязательны.
 
@@ -48,11 +50,54 @@ docker run --name wddl \
   -v /volume1/wddl/state:/data/state \
   -v /volume1/video/movies:/libraries/movies:ro \
   -v /volume1/video/archive:/libraries/archive:ro \
-  wddl
+wddl
 ```
 
 Пути внутри контейнера должны совпадать с `download.destination`,
 `download.temp`, `queue.file` и `existing_files.roots` в YAML.
+
+Контейнер по умолчанию запускает `wddl run`. Демон — единственный
+владелец WebDAV-клиента, очереди и индекса. Остальные команды
+общаются с ним по HTTP/JSON только через Unix-сокет; TCP-порт не
+открывается. Клиентским командам не нужны `WEBDAV_USER` и
+`WEBDAV_PASSWORD`.
+
+## Команды
+
+```text
+wddl run
+wddl status [--json]
+wddl watch [--json]
+wddl scan remote|local|all [--json]
+wddl queue list [--json]
+wddl queue remove <id> [--json]
+wddl queue retry <id> [--json]
+wddl download cancel <id> [--json]
+wddl id <remote-path> [--json]
+wddl cleanup remote [--confirm <token>] [--json]
+wddl config validate [--json]
+wddl config reload [--json]
+wddl version [--json]
+```
+
+`status` — одноразовый снимок, `watch` — живой поток прогресса и событий,
+а постоянный лог содержит только запуски, итоги, ошибки и
+предупреждения. Ручной `scan` не сдвигает периодическое расписание;
+повторные запросы одного типа объединяются.
+
+В `queue list`, `status` и `watch` показан полный ID. Команды управления
+принимают и однозначный префик. `wddl id /Sync/movie.mkv` вычисляет ID
+по текущему размеру удалённого файла. `download cancel` сохраняет
+готовые части и переводит задачу в `suspended`; `queue retry` возвращает
+её в `ready`.
+
+### Synology Container Manager
+
+В интерфейсе Container Manager откройте контейнер `wddl`, перейдите
+во вкладку Terminal/Терминал и создайте команду в уже работающем
+контейнере. Например: `wddl status`, `wddl scan all` или `wddl watch`.
+Не запускайте второй `wddl run`: он обнаружит занятый сокет и
+завершится с ошибкой.
 
 ## Дополнительные локальные библиотеки
 
@@ -88,8 +133,16 @@ docker run --name wddl \
 
 ## Удаление с WebDAV
 
-`download.remove_remote: true` и временный одноразовый режим
-`UTIL_CLEAR_REMOTE=true` физически удаляют с WebDAV файлы, для которых найдена
-локальная копия. Перед каждым удалением путь, имя и размер локального файла
-проверяются повторно. Оставляйте оба режима выключенными, если удалённое
-хранилище должно оставаться неизменным.
+`download.remove_remote: true` удаляет исходник после успешной загрузки и
+повторной проверки локальной копии. Массовая очистка всегда требует
+два отдельных вызова:
+
+```sh
+wddl cleanup remote
+wddl cleanup remote --confirm <токен-из-preview>
+```
+
+Первый вызов ничего не удаляет: он показывает пути, количество, размер и
+готовую команду подтверждения. Токен короткоживущий и одноразовый.
+Перед каждым `DELETE` демон снова проверяет и локальный файл, и актуальные
+метаданные WebDAV.
