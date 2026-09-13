@@ -1,0 +1,13 @@
+.git
+.github
+.env
+config.yaml
+queue.json
+**/queue.json
+*.db
+Sync
+test
+plans
+README.md
+AGENTS.md
+compose.example.yaml
