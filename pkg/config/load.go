@@ -43,7 +43,24 @@ func Load(path string) (Config, error) {
 // Defaults returns the base configuration used before YAML decoding. Concrete
 // application defaults are defined separately from the decoding mechanism.
 func Defaults() Config {
-	return Config{}
+	return Config{
+		WebDAV: WebDAV{
+			Root: "/",
+		},
+		Download: Download{
+			Destination: "./download",
+			Temp:        "/tmp/wddl",
+			Workers:     4,
+			ScanEvery:   Duration(10 * time.Minute),
+		},
+		Queue: Queue{
+			File: "./queue.json",
+		},
+		ExistingFiles: ExistingFiles{
+			Roots:     []string{},
+			ScanEvery: Duration(24 * time.Hour),
+		},
+	}
 }
 
 func (d *Duration) UnmarshalYAML(node *yaml.Node) error {
