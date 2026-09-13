@@ -6,6 +6,7 @@ require (
 	git.papkovda.ru/library/gokit v0.1.3
 	github.com/go-pkgz/lgr v0.11.1
 	github.com/studio-b12/gowebdav v0.9.0
+	gopkg.in/yaml.v3 v3.0.1
 )
 
 require (
