@@ -25,3 +25,7 @@ RUN apk add --no-cache ca-certificates
 COPY --from=builder /out/wddl /usr/local/bin/wddl
 
 ENV WDDL_CONFIG=/config/config.yaml
+
+WORKDIR /var/lib/wddl
+ENTRYPOINT ["wddl"]
+CMD ["run"]
