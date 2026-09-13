@@ -2,6 +2,7 @@ package queue
 
 import (
 	"context"
+	"sort"
 	"sync"
 	"time"
 
@@ -22,6 +23,7 @@ func New(path string) (*Queue, error) {
 	return &Queue{
 		path:          path,
 		items:         items,
+		changed:       make(chan struct{}, 1),
 		writeSnapshot: writeSnapshot,
 	}, nil
 }
@@ -32,20 +34,24 @@ type Queue struct {
 	mx    sync.RWMutex
 	items map[string]engine.File
 
+	changed       chan struct{}
 	writeSnapshot snapshotWriter
 }
 
 // Add - добавляет файл в очередь
 func (q *Queue) Add(file engine.File) error {
 	q.mx.Lock()
-	defer q.mx.Unlock()
-
 	next := cloneItems(q.items)
 	next[file.ID] = file
 
 	committed, err := q.writeSnapshot(q.path, next)
 	if committed {
 		q.items = next
+	}
+	q.mx.Unlock()
+
+	if committed {
+		q.notifyChanged()
 	}
 	if err != nil {
 		return err
@@ -91,7 +97,14 @@ func (q *Queue) Stat() (*engine.Stat, error) {
 func (q *Queue) List(filter func(f engine.File) error) ([]engine.File, error) {
 	items := q.snapshot()
 	result := make([]engine.File, 0, len(items))
-	for _, file := range items {
+	ids := make([]string, 0, len(items))
+	for id := range items {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+
+	for _, id := range ids {
+		file := items[id]
 		if filter != nil {
 			if err := filter(file); err != nil {
 				continue
@@ -102,6 +115,13 @@ func (q *Queue) List(filter func(f engine.File) error) ([]engine.File, error) {
 	}
 
 	return result, nil
+}
+
+func (q *Queue) notifyChanged() {
+	select {
+	case q.changed <- struct{}{}:
+	default:
+	}
 }
 
 func (q *Queue) snapshot() map[string]engine.File {
@@ -121,23 +141,42 @@ func (q *Queue) Chan(ctx context.Context, log lgr.L, filter func(f engine.File) 
 		defer close(ch)
 
 		ticker := time.NewTicker(time.Second * 3)
+		defer ticker.Stop()
+
+		emit := func() bool {
+			items, err := q.List(filter)
+			if err != nil {
+				log.Logf("[ERROR] listing files: %v", err)
+				return true
+			}
+
+			for _, item := range items {
+				select {
+				case ch <- item:
+				case <-ctx.Done():
+					return false
+				}
+			}
+
+			return true
+		}
+
+		if !emit() {
+			return
+		}
 
 		for {
 			select {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				items, err := q.List(filter)
-				if err != nil {
-					log.Logf("[ERROR] listing files: %v", err)
-					continue
+				if !emit() {
+					return
 				}
-
-				for _, item := range items {
-					ch <- item
+			case <-q.changed:
+				if !emit() {
+					return
 				}
-			default:
-				time.Sleep(time.Millisecond * 100)
 			}
 		}
 	}()
