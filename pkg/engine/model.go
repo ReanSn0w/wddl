@@ -140,6 +140,12 @@ type Progress struct {
 
 	// Скорость загрузки файла в байтах в секунду
 	Speed int64
+
+	// Точное количество уже записанных байтов, включая готовые части.
+	Downloaded int64
+
+	// Полный размер загружаемого файла.
+	Size int64
 }
 
 type ActiveDownload struct {
@@ -172,6 +178,29 @@ type SpeedData struct {
 	}
 }
 
+func (sd *SpeedData) Add(progress Progress) {
+	sd.mx.Lock()
+	defer sd.mx.Unlock()
+
+	item, ok := sd.items[progress.ID]
+	if !ok {
+		item = struct {
+			mark  time.Time
+			items []Progress
+		}{
+			mark:  time.Now(),
+			items: []Progress{},
+		}
+	}
+
+	item.mark = time.Now()
+	item.items = append(item.items, progress)
+	if len(item.items) > 10 {
+		item.items = item.items[len(item.items)-10:]
+	}
+	sd.items[progress.ID] = item
+}
+
 func (sd *SpeedData) MakeChan(input <-chan Progress) <-chan Progress {
 	output := make(chan Progress)
 
@@ -179,29 +208,7 @@ func (sd *SpeedData) MakeChan(input <-chan Progress) <-chan Progress {
 		defer close(output)
 
 		for progress := range input {
-			sd.mx.Lock()
-
-			item, ok := sd.items[progress.ID]
-			if !ok {
-				item = struct {
-					mark  time.Time
-					items []Progress
-				}{
-					mark:  time.Now(),
-					items: []Progress{},
-				}
-			}
-
-			item.items = append(item.items, progress)
-			sd.items[progress.ID] = item
-
-			// Оставляем последние 10 элементов
-			if len(item.items) > 10 {
-				item.items = item.items[len(item.items)-10:]
-			}
-
-			sd.mx.Unlock()
-
+			sd.Add(progress)
 			output <- progress
 		}
 	}()
@@ -228,6 +235,7 @@ func (sd *SpeedData) AvgSpeed() int64 {
 	for key, item := range sd.items {
 		if currentTime.Sub(item.mark) > maxAge {
 			toClean = append(toClean, key)
+			continue
 		}
 
 		var (
@@ -240,6 +248,9 @@ func (sd *SpeedData) AvgSpeed() int64 {
 			itemItemsCount++
 		}
 
+		if itemItemsCount == 0 {
+			continue
+		}
 		avgSpeed += itemAvgSpeed / int64(itemItemsCount)
 		itemsCount++
 	}

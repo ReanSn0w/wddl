@@ -136,7 +136,6 @@ func (e *Engine) downloadFiles(ctx context.Context, pc chan<- Progress, limit in
 			}
 			// Try to acquire file lock
 			if !e.acquireFileLock(file.ID) {
-				e.log.Logf("[WARN] file %s is already being downloaded, skipping", file.Name)
 				continue
 			}
 
@@ -204,9 +203,9 @@ func (e *Engine) downloadFiles(ctx context.Context, pc chan<- Progress, limit in
 // Данный метод запускает процесс отслеживания прогресса загрузки файлов
 func (e *Engine) progressPrinter(ctx context.Context, items <-chan Progress) {
 	ticker := time.NewTicker(time.Minute * 15)
+	defer ticker.Stop()
 
 	speedCounter := NewSpeedData()
-	items = speedCounter.MakeChan(items)
 
 	for {
 		select {
@@ -228,11 +227,13 @@ func (e *Engine) progressPrinter(ctx context.Context, items <-chan Progress) {
 					"[INFO] avg speed %.2f KB/s ; estimate %v ; in queue %d files",
 					float64(avgSpeed)/1024, avgTime, stat.Files)
 			}
-		case progress := <-items:
+		case progress, ok := <-items:
+			if !ok {
+				return
+			}
+			speedCounter.Add(progress)
 			e.updateProgress(progress)
 			e.publish("download.progress", File{ID: progress.ID, Name: progress.Name}, progress)
-		default:
-			time.Sleep(time.Millisecond * 100)
 		}
 	}
 }
@@ -250,7 +251,13 @@ func (e *Engine) updateProgress(progress Progress) {
 	if ok {
 		active.Percent = progress.Percent
 		active.Speed = progress.Speed
-		active.Downloaded = int64(float64(active.Size) * progress.Percent / 100)
+		active.Downloaded = progress.Downloaded
+		if active.Downloaded < 0 {
+			active.Downloaded = 0
+		}
+		if active.Downloaded > active.Size {
+			active.Downloaded = active.Size
+		}
 		e.active[progress.ID] = active
 	}
 	e.lockMutex.Unlock()

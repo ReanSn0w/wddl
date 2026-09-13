@@ -104,6 +104,7 @@ func New(conf config.Config, revision string, log logger, downloader *engine.Eng
 			data = control.DownloadProgress{
 				ID: progress.ID, Name: progress.Name,
 				Percent: progress.Percent, Speed: progress.Speed,
+				Downloaded: progress.Downloaded, Size: progress.Size,
 			}
 		}
 		daemon.broker.Publish(control.Event{Type: eventType, ID: file.ID, Message: file.Name, Data: data})
