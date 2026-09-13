@@ -45,13 +45,19 @@ type Daemon struct {
 	localMu  sync.Mutex
 	remote   control.ScanState
 	local    control.ScanState
+	broker   *control.Broker
 }
 
 func New(conf config.Config, revision string, log logger, downloader *engine.Engine, tasks queueView, index localIndex) *Daemon {
-	return &Daemon{
+	daemon := &Daemon{
 		config: conf, revision: revision, log: log, engine: downloader, queue: tasks, index: index,
 		remoteCH: make(chan struct{}, 1), localCH: make(chan struct{}, 1), allCH: make(chan struct{}, 1),
+		broker: control.NewBroker(),
 	}
+	downloader.SetEventSink(func(eventType string, file engine.File, data any) {
+		daemon.broker.Publish(control.Event{Type: eventType, ID: file.ID, Message: file.Name, Data: data})
+	})
+	return daemon
 }
 
 func (d *Daemon) Run(ctx context.Context) error {
@@ -147,10 +153,8 @@ func unavailable(operation string) error {
 	return &control.APIError{Status: http.StatusNotImplemented, Code: control.CodeConflict, Message: operation + " is not initialized"}
 }
 
-func (d *Daemon) Subscribe(context.Context) (<-chan control.Event, func()) {
-	ch := make(chan control.Event)
-	close(ch)
-	return ch, func() {}
+func (d *Daemon) Subscribe(ctx context.Context) (<-chan control.Event, func()) {
+	return d.broker.Subscribe(ctx)
 }
 func (d *Daemon) TriggerScan(kind control.ScanKind) (control.ScanAccepted, error) {
 	if err := control.ValidateScanKind(kind); err != nil {
@@ -281,6 +285,7 @@ func (d *Daemon) scanStarted(kind control.ScanKind) {
 		state = &d.remote
 	}
 	state.Scheduled, state.Running, state.LastStart = false, true, &now
+	d.broker.Publish(control.Event{Type: "scan.started", Message: string(kind) + " scan started", Data: map[string]any{"kind": kind}})
 }
 
 func (d *Daemon) scanFinished(kind control.ScanKind, err error) {
@@ -298,6 +303,13 @@ func (d *Daemon) scanFinished(kind control.ScanKind, err error) {
 	} else {
 		d.log.Logf("[INFO] %s scan completed", kind)
 	}
+	event := control.Event{Type: "scan.completed", Message: string(kind) + " scan completed", Data: map[string]any{"kind": kind}}
+	if err != nil {
+		event.Type = "scan.failed"
+		event.Message = string(kind) + " scan failed"
+		event.Data = map[string]any{"kind": kind, "error": err.Error()}
+	}
+	d.broker.Publish(event)
 }
 func (d *Daemon) QueueList() ([]control.QueueItem, error) { return nil, unavailable("queue control") }
 func (d *Daemon) QueueRemove(string) (control.QueueItem, error) {

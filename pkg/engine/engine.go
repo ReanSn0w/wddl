@@ -34,7 +34,16 @@ type Engine struct {
 	existingFiles ExistingFileFinder
 	fileLocks     map[string]bool // Track locked files
 	active        map[string]ActiveDownload
-	lockMutex     *sync.Mutex // Protect fileLocks map
+	eventSink     func(string, File, any)
+	lockMutex     *sync.Mutex // Protect runtime maps
+}
+
+func (e *Engine) SetEventSink(sink func(string, File, any)) { e.eventSink = sink }
+
+func (e *Engine) publish(eventType string, file File, data any) {
+	if e.eventSink != nil {
+		e.eventSink(eventType, file, data)
+	}
 }
 
 func (e *Engine) Start(ctx context.Context) {
@@ -84,6 +93,8 @@ func (e *Engine) scanNewFilesOnce(inputPath string) error {
 			e.log.Logf("[DEBUG] file %s not found in queue", file.Name)
 			if err := e.queue.Add(file); err != nil {
 				e.log.Logf("[ERROR] failed to add file %s to queue: %v", file.Name, err)
+			} else {
+				e.publish("queue.added", file, nil)
 			}
 		default:
 			e.log.Logf("[ERROR] failed to check file %s in queue: %v", file.Name, err)
@@ -125,14 +136,17 @@ func (e *Engine) downloadFiles(ctx context.Context, pc chan<- Progress, limit in
 					return
 				}
 				e.beginActive(f)
+				e.publish("download.started", f, nil)
 
 				e.log.Logf("[DEBUG] starting download of file %s (size: %d bytes)", f.Name, f.Size)
 
 				err = e.downloader.Download(pc, f)
 				if err != nil {
 					e.log.Logf("[ERROR] failed to download file %s: %v", f.Name, err)
+					e.publish("download.failed", f, map[string]string{"error": err.Error()})
 				} else {
 					e.log.Logf("[INFO] successfully downloaded file %s", f.Name)
+					e.publish("download.completed", f, nil)
 					err = e.queue.Delete(f.ID)
 					if err != nil {
 						e.log.Logf("[ERROR] failed to delete file %s from queue: %v", f.Name, err)
@@ -182,7 +196,7 @@ func (e *Engine) progressPrinter(ctx context.Context, items <-chan Progress) {
 			}
 		case progress := <-items:
 			e.updateProgress(progress)
-			e.log.Logf("[INFO] %s", progress.String())
+			e.publish("download.progress", File{ID: progress.ID, Name: progress.Name}, progress)
 		default:
 			time.Sleep(time.Millisecond * 100)
 		}
