@@ -73,18 +73,19 @@ type ActiveDownload struct {
 }
 
 type Status struct {
-	SchemaVersion int              `json:"schema_version"`
-	Revision      string           `json:"revision"`
-	StartedAt     time.Time        `json:"started_at"`
-	Uptime        time.Duration    `json:"uptime_nanoseconds"`
-	ShuttingDown  bool             `json:"shutting_down"`
-	Pending       int              `json:"pending"`
-	Suspended     int              `json:"suspended"`
-	Active        []ActiveDownload `json:"active"`
-	RemoteScan    ScanState        `json:"remote_scan"`
-	LocalScan     ScanState        `json:"local_scan"`
-	IndexedFiles  int              `json:"indexed_files"`
-	LastReload    *ReloadResult    `json:"last_reload,omitempty"`
+	SchemaVersion int               `json:"schema_version"`
+	Revision      string            `json:"revision"`
+	StartedAt     time.Time         `json:"started_at"`
+	Uptime        time.Duration     `json:"uptime_nanoseconds"`
+	ShuttingDown  bool              `json:"shutting_down"`
+	Pending       int               `json:"pending"`
+	Suspended     int               `json:"suspended"`
+	Active        []ActiveDownload  `json:"active"`
+	RemoteScan    ScanState         `json:"remote_scan"`
+	LocalScan     ScanState         `json:"local_scan"`
+	IndexedFiles  int               `json:"indexed_files"`
+	Errors        map[string]string `json:"errors,omitempty"`
+	LastReload    *ReloadResult     `json:"last_reload,omitempty"`
 }
 
 type Event struct {

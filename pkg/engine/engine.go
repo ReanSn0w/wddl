@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"sync"
 	"time"
 
@@ -19,6 +20,7 @@ func New(log lgr.L, conf Config, scanner Scanner, downloader Downloader, queue Q
 		downloader:    downloader,
 		existingFiles: existingFiles,
 		fileLocks:     make(map[string]bool),
+		active:        make(map[string]ActiveDownload),
 		lockMutex:     &sync.Mutex{},
 	}
 }
@@ -31,7 +33,8 @@ type Engine struct {
 	downloader    Downloader
 	existingFiles ExistingFileFinder
 	fileLocks     map[string]bool // Track locked files
-	lockMutex     *sync.Mutex     // Protect fileLocks map
+	active        map[string]ActiveDownload
+	lockMutex     *sync.Mutex // Protect fileLocks map
 }
 
 func (e *Engine) Start(ctx context.Context) {
@@ -112,6 +115,7 @@ func (e *Engine) downloadFiles(ctx context.Context, pc chan<- Progress, limit in
 
 			go func(f File) {
 				defer func() {
+					e.endActive(f.ID)
 					<-limiter
 					e.releaseFileLock(f.ID)
 				}()
@@ -120,6 +124,7 @@ func (e *Engine) downloadFiles(ctx context.Context, pc chan<- Progress, limit in
 				if err != nil {
 					return
 				}
+				e.beginActive(f)
 
 				e.log.Logf("[DEBUG] starting download of file %s (size: %d bytes)", f.Name, f.Size)
 
@@ -176,11 +181,47 @@ func (e *Engine) progressPrinter(ctx context.Context, items <-chan Progress) {
 					float64(avgSpeed)/1024, avgTime, stat.Files)
 			}
 		case progress := <-items:
+			e.updateProgress(progress)
 			e.log.Logf("[INFO] %s", progress.String())
 		default:
 			time.Sleep(time.Millisecond * 100)
 		}
 	}
+}
+
+func (e *Engine) beginActive(file File) {
+	e.lockMutex.Lock()
+	e.active[file.ID] = ActiveDownload{ID: file.ID, Name: file.Name, Size: file.Size}
+	e.lockMutex.Unlock()
+}
+
+func (e *Engine) updateProgress(progress Progress) {
+	e.lockMutex.Lock()
+	active, ok := e.active[progress.ID]
+	if ok {
+		active.Percent = progress.Percent
+		active.Speed = progress.Speed
+		active.Downloaded = int64(float64(active.Size) * progress.Percent / 100)
+		e.active[progress.ID] = active
+	}
+	e.lockMutex.Unlock()
+}
+
+func (e *Engine) endActive(id string) {
+	e.lockMutex.Lock()
+	delete(e.active, id)
+	e.lockMutex.Unlock()
+}
+
+func (e *Engine) ActiveDownloads() []ActiveDownload {
+	e.lockMutex.Lock()
+	defer e.lockMutex.Unlock()
+	result := make([]ActiveDownload, 0, len(e.active))
+	for _, active := range e.active {
+		result = append(result, active)
+	}
+	sort.Slice(result, func(i, j int) bool { return result[i].ID < result[j].ID })
+	return result
 }
 
 func (e *Engine) acquireFileLock(fileID string) bool {

@@ -130,6 +130,15 @@ type Progress struct {
 	Speed int64
 }
 
+type ActiveDownload struct {
+	ID         string
+	Name       string
+	Size       int64
+	Downloaded int64
+	Percent    float64
+	Speed      int64
+}
+
 func (p *Progress) String() string {
 	return fmt.Sprintf("%s (%.2f%%) %.2f KB/s", p.Name, p.Percent, float64(p.Speed)/1024)
 }

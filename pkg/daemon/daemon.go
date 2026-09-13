@@ -115,9 +115,30 @@ func (d *Daemon) Status() control.Status {
 		items, _ := d.queue.List(nil)
 		status.Pending = len(items)
 	}
+	for _, active := range d.engine.ActiveDownloads() {
+		item := control.ActiveDownload{
+			ID: active.ID, Name: active.Name, Size: active.Size, Downloaded: active.Downloaded,
+			Percent: active.Percent, Speed: active.Speed,
+		}
+		if active.Speed > 0 && active.Downloaded < active.Size {
+			item.ETA = time.Duration((active.Size-active.Downloaded)/active.Speed) * time.Second
+		}
+		status.Active = append(status.Active, item)
+	}
+	status.Pending -= len(status.Active)
+	if status.Pending < 0 {
+		status.Pending = 0
+	}
 	d.mu.RLock()
 	status.RemoteScan = d.remote
 	status.LocalScan = d.local
+	status.Errors = map[string]string{}
+	if d.remote.LastError != "" {
+		status.Errors["remote_scan"] = d.remote.LastError
+	}
+	if d.local.LastError != "" {
+		status.Errors["local_scan"] = d.local.LastError
+	}
 	d.mu.RUnlock()
 	return status
 }
