@@ -19,7 +19,7 @@ MyPikPak.
   `download.scan_every`, `download.remove_remote`;
 - `queue.file`;
 - `existing_files.roots`, `existing_files.scan_every`;
-- `logging.debug`.
+- `logging.debug`;
 - `control.socket`, `control.request_timeout`, `control.shutdown_timeout`.
 
 Значения интервалов используют синтаксис Go duration: `30s`, `10m`, `24h`.
@@ -36,22 +36,16 @@ MyPikPak.
 ## Запуск контейнера
 
 Скопируйте `config.example.yaml` в `config.yaml`, укажите WebDAV-сервер и пути,
-затем запустите контейнер. Конфигурация и медиабиблиотеки монтируются read-only;
-каталоги загрузок, временных частей и состояния — отдельными writable mounts.
+затем запустите контейнер. Рекомендуемый сценарий для Synology находится в
+`compose.example.yaml`: конфигурация и медиабиблиотеки там read-only, а загрузки,
+временные части, `queue.json` и control socket размещены в явных writable mounts.
 
-```sh
-docker run --name wddl \
-  -e WDDL_CONFIG=/config/config.yaml \
-  -e WEBDAV_USER=user \
-  -e WEBDAV_PASSWORD=password \
-  -v ./config.yaml:/config/config.yaml:ro \
-  -v /volume1/wddl/download:/data/download \
-  -v /volume1/wddl/tmp:/data/tmp \
-  -v /volume1/wddl/state:/data/state \
-  -v /volume1/video/movies:/libraries/movies:ro \
-  -v /volume1/video/archive:/libraries/archive:ro \
-wddl
-```
+Compose не выполняет `$(id -u)` и `$(id -g)` внутри YAML. Внесите числовые
+`WDDL_UID` и `WDDL_GID` в environment проекта Container Manager или в соседний
+`.env`. По умолчанию используется `10001:10001`, как у пользователя образа.
+Назначьте этому UID/GID чтение `config.yaml` и библиотек, а также запись в
+`download`, `tmp` и `state`. При переопределении произвольным numeric UID у него может не
+быть имени в `/etc/passwd`; это не мешает работе `wddl` и `/bin/sh`.
 
 Пути внутри контейнера должны совпадать с `download.destination`,
 `download.temp`, `queue.file` и `existing_files.roots` в YAML.
@@ -86,7 +80,7 @@ wddl version [--json]
 повторные запросы одного типа объединяются.
 
 В `queue list`, `status` и `watch` показан полный ID. Команды управления
-принимают и однозначный префик. `wddl id /Sync/movie.mkv` вычисляет ID
+принимают и однозначный префикс. `wddl id /Sync/movie.mkv` вычисляет ID
 по текущему размеру удалённого файла. `download cancel` сохраняет
 готовые части и переводит задачу в `suspended`; `queue retry` возвращает
 её в `ready`.
@@ -98,6 +92,12 @@ wddl version [--json]
 контейнере. Например: `wddl status`, `wddl scan all` или `wddl watch`.
 Не запускайте второй `wddl run`: он обнаружит занятый сокет и
 завершится с ошибкой.
+
+Образ основан на Alpine: в нём есть `/bin/sh` и BusyBox, но нет Bash и curl.
+Встроенный healthcheck вызывает `wddl status --json` через Unix-сокет. Он
+показывает, что демон отвечает, но не считает отдельную ошибку загрузки
+нездоровым состоянием всего контейнера; для первичного индекса задан
+`start_period: 15m` в Dockerfile.
 
 ## Дополнительные локальные библиотеки
 
