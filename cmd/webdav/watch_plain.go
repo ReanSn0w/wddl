@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -9,6 +10,13 @@ import (
 
 	"github.com/ReanSn0w/wddl/pkg/control"
 )
+
+func normalizeWatchResult(ctx context.Context, err error) error {
+	if err == nil || errors.Is(err, context.Canceled) || ctx.Err() != nil {
+		return nil
+	}
+	return err
+}
 
 type watchClient interface {
 	Status(context.Context) (control.Status, error)

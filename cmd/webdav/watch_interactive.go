@@ -30,9 +30,9 @@ func runInteractiveWatch(ctx context.Context, client watchClient, renderer inter
 	}
 
 	watchCtx, cancel := context.WithCancel(ctx)
-	defer cancel()
 	events := make(chan control.Event, 64)
 	watchDone := make(chan error, 1)
+	watchFinished := false
 	go func() {
 		watchDone <- client.Watch(watchCtx, func(event control.Event) error {
 			select {
@@ -42,6 +42,12 @@ func runInteractiveWatch(ctx context.Context, client watchClient, renderer inter
 				return watchCtx.Err()
 			}
 		})
+	}()
+	defer func() {
+		cancel()
+		if !watchFinished {
+			<-watchDone
+		}
 	}()
 
 	renderTicker := time.NewTicker(watchRenderEvery)
@@ -55,6 +61,7 @@ func runInteractiveWatch(ctx context.Context, client watchClient, renderer inter
 		case <-ctx.Done():
 			return nil
 		case err := <-watchDone:
+			watchFinished = true
 			if err == nil || errors.Is(err, context.Canceled) || ctx.Err() != nil {
 				return nil
 			}

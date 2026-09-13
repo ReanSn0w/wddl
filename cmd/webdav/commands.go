@@ -44,12 +44,17 @@ func executeCommand(ctx context.Context, parsed parsedCLI, out io.Writer, getenv
 		}
 		return printValue(out, parsed.Options.Status.JSON, value, formatStatus)
 	case "watch":
-		if parsed.Options.Watch.JSON {
-			return client.Watch(ctx, func(event control.Event) error {
+		terminal, width := watchTerminal(out)
+		switch selectWatchOutputMode(parsed.Options.Watch, terminal, getenv("TERM")) {
+		case watchOutputJSON:
+			return normalizeWatchResult(ctx, client.Watch(ctx, func(event control.Event) error {
 				return json.NewEncoder(out).Encode(event)
-			})
+			}))
+		case watchOutputInteractive:
+			return runInteractiveWatch(ctx, client, newANSIWatchRenderer(out, width))
+		default:
+			return normalizeWatchResult(ctx, runPlainWatch(ctx, client, out))
 		}
-		return runPlainWatch(ctx, client, out)
 	case "scan remote", "scan local", "scan all":
 		kind := control.ScanKind(parsed.Command[len("scan "):])
 		value, err := client.Scan(ctx, kind)
