@@ -364,8 +364,19 @@ func (d *Daemon) QueueRetry(prefix string) (control.QueueItem, error) {
 	d.broker.Publish(control.Event{Type: "download.resumed", ID: file.ID, Message: file.Name})
 	return queueItem(file), nil
 }
-func (d *Daemon) CancelDownload(string) (control.QueueItem, error) {
-	return control.QueueItem{}, unavailable("download cancellation")
+func (d *Daemon) CancelDownload(prefix string) (control.QueueItem, error) {
+	file, err := d.resolveTask(prefix)
+	if err != nil {
+		return control.QueueItem{}, err
+	}
+	if !d.engine.CancelDownload(file.ID) {
+		return control.QueueItem{}, &control.APIError{Status: http.StatusConflict, Code: control.CodeConflict, Message: "task is not actively downloading"}
+	}
+	file, err = d.queue.SetState(file.ID, engine.TaskSuspended)
+	if err != nil {
+		return control.QueueItem{}, err
+	}
+	return queueItem(file), nil
 }
 func (d *Daemon) ResolveRemoteID(string) (control.RemoteID, error) {
 	return control.RemoteID{}, unavailable("remote ID lookup")

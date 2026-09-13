@@ -53,7 +53,7 @@ type Scanner interface {
 }
 
 type Downloader interface {
-	Download(pch chan<- Progress, file File) error
+	Download(ctx context.Context, pch chan<- Progress, file File) error
 	Delete(file File) error
 }
 
@@ -74,6 +74,7 @@ type Queue interface {
 	List(filter func(f File) error) ([]File, error)
 	Chan(ctx context.Context, log lgr.L, filter func(f File) error) <-chan File
 	Delete(id string) error
+	SetState(id string, state TaskState) (File, error)
 }
 
 type Stat struct {

@@ -21,6 +21,7 @@ func New(log lgr.L, conf Config, scanner Scanner, downloader Downloader, queue Q
 		existingFiles: existingFiles,
 		fileLocks:     make(map[string]bool),
 		active:        make(map[string]ActiveDownload),
+		cancels:       make(map[string]context.CancelFunc),
 		lockMutex:     &sync.Mutex{},
 	}
 }
@@ -34,6 +35,7 @@ type Engine struct {
 	existingFiles ExistingFileFinder
 	fileLocks     map[string]bool // Track locked files
 	active        map[string]ActiveDownload
+	cancels       map[string]context.CancelFunc
 	eventSink     func(string, File, any)
 	lockMutex     *sync.Mutex // Protect runtime maps
 }
@@ -135,15 +137,24 @@ func (e *Engine) downloadFiles(ctx context.Context, pc chan<- Progress, limit in
 				if err != nil {
 					return
 				}
-				e.beginActive(f)
+				downloadCtx, cancel := context.WithCancel(ctx)
+				e.beginActive(f, cancel)
 				e.publish("download.started", f, nil)
 
 				e.log.Logf("[DEBUG] starting download of file %s (size: %d bytes)", f.Name, f.Size)
 
-				err = e.downloader.Download(pc, f)
+				err = e.downloader.Download(downloadCtx, pc, f)
 				if err != nil {
-					e.log.Logf("[ERROR] failed to download file %s: %v", f.Name, err)
-					e.publish("download.failed", f, map[string]string{"error": err.Error()})
+					if errors.Is(err, context.Canceled) {
+						if _, stateErr := e.queue.SetState(f.ID, TaskSuspended); stateErr != nil {
+							e.log.Logf("[ERROR] suspend cancelled download %s: %v", f.Name, stateErr)
+						}
+						e.log.Logf("[INFO] download cancelled for %s", f.Name)
+						e.publish("download.cancelled", f, nil)
+					} else {
+						e.log.Logf("[ERROR] failed to download file %s: %v", f.Name, err)
+						e.publish("download.failed", f, map[string]string{"error": err.Error()})
+					}
 				} else {
 					e.log.Logf("[INFO] successfully downloaded file %s", f.Name)
 					e.publish("download.completed", f, nil)
@@ -203,9 +214,10 @@ func (e *Engine) progressPrinter(ctx context.Context, items <-chan Progress) {
 	}
 }
 
-func (e *Engine) beginActive(file File) {
+func (e *Engine) beginActive(file File, cancel context.CancelFunc) {
 	e.lockMutex.Lock()
 	e.active[file.ID] = ActiveDownload{ID: file.ID, Name: file.Name, Size: file.Size}
+	e.cancels[file.ID] = cancel
 	e.lockMutex.Unlock()
 }
 
@@ -224,7 +236,18 @@ func (e *Engine) updateProgress(progress Progress) {
 func (e *Engine) endActive(id string) {
 	e.lockMutex.Lock()
 	delete(e.active, id)
+	delete(e.cancels, id)
 	e.lockMutex.Unlock()
+}
+
+func (e *Engine) CancelDownload(id string) bool {
+	e.lockMutex.Lock()
+	cancel, ok := e.cancels[id]
+	e.lockMutex.Unlock()
+	if ok {
+		cancel()
+	}
+	return ok
 }
 
 func (e *Engine) ActiveDownloads() []ActiveDownload {

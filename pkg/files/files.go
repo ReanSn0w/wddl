@@ -1,6 +1,7 @@
 package files
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"math"
@@ -56,15 +57,17 @@ func (f *Files) Scan(conf engine.Config, inputDir string) ([]engine.File, error)
 	return result, nil
 }
 
-func (d *Files) Download(pch chan<- engine.Progress, file engine.File) error {
+func (d *Files) Download(ctx context.Context, pch chan<- engine.Progress, file engine.File) error {
 	var lastErr error
 
 	lgr.Default().Logf("[DEBUG] download delay before starting (3 seconds)")
-	time.Sleep(time.Second * 3)
+	if err := wait(ctx, time.Second*3); err != nil {
+		return err
+	}
 
 	for attempt := range maxRetries {
 		lgr.Default().Logf("[DEBUG] download attempt %d/%d for file %s", attempt+1, maxRetries, file.Name)
-		err := d.download(pch, file)
+		err := d.download(ctx, pch, file)
 		if err == nil {
 			lgr.Default().Logf("[INFO] download completed successfully for file %s", file.Name)
 			return nil
@@ -74,7 +77,9 @@ func (d *Files) Download(pch chan<- engine.Progress, file engine.File) error {
 			backoff := time.Duration(math.Pow(2, float64(attempt+1))) * time.Second
 			lgr.Default().Logf("[WARN] download attempt %d/%d failed for %s, retry in %v: %v",
 				attempt+1, maxRetries, file.ID, backoff, err)
-			time.Sleep(backoff)
+			if err := wait(ctx, backoff); err != nil {
+				return err
+			}
 		}
 	}
 
@@ -86,7 +91,10 @@ func (d *Files) Delete(file engine.File) error {
 	return d.client.Remove(file.Source)
 }
 
-func (f *Files) download(pch chan<- engine.Progress, file engine.File) error {
+func (f *Files) download(ctx context.Context, pch chan<- engine.Progress, file engine.File) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	lgr.Default().Logf("[DEBUG] creating temp directory for file %s", file.Name)
 	err := os.MkdirAll(file.Temp, 0755)
 	if err != nil {
@@ -110,6 +118,15 @@ func (f *Files) download(pch chan<- engine.Progress, file engine.File) error {
 		}
 
 		defer datastream.Close()
+		streamDone := make(chan struct{})
+		go func() {
+			select {
+			case <-ctx.Done():
+				_ = datastream.Close()
+			case <-streamDone:
+			}
+		}()
+		defer close(streamDone)
 
 		pwc := &PartitionWriteCloser{
 			ProgressChan: pch,
@@ -122,7 +139,13 @@ func (f *Files) download(pch chan<- engine.Progress, file engine.File) error {
 
 		_, err = io.Copy(pwc, datastream)
 		if err != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
 			return fmt.Errorf("failed to copy download data: %w", err)
+		}
+		if err := ctx.Err(); err != nil {
+			return err
 		}
 
 		lgr.Default().Logf("[DEBUG] download stream completed for file %s", file.Name)
@@ -132,6 +155,17 @@ func (f *Files) download(pch chan<- engine.Progress, file engine.File) error {
 
 	lgr.Default().Logf("[DEBUG] completing file %s (merging partitions and moving to destination)", file.Name)
 	return f.completeFile(file)
+}
+
+func wait(ctx context.Context, duration time.Duration) error {
+	timer := time.NewTimer(duration)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 
 func (f *Files) validatePartitions(file engine.File, stat *Stat) error {

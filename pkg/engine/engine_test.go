@@ -160,7 +160,7 @@ type fakeDownloader struct {
 	deleteErr     error
 }
 
-func (d *fakeDownloader) Download(chan<- Progress, File) error {
+func (d *fakeDownloader) Download(context.Context, chan<- Progress, File) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.downloadCount++
@@ -258,4 +258,16 @@ func (q *fakeQueue) Delete(id string) error {
 	default:
 	}
 	return nil
+}
+
+func (q *fakeQueue) SetState(id string, state TaskState) (File, error) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	file, ok := q.files[id]
+	if !ok {
+		return File{}, ErrNotFound
+	}
+	file.State = state
+	q.files[id] = file
+	return file, nil
 }
