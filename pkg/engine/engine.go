@@ -50,6 +50,7 @@ func (e *Engine) Start(ctx context.Context) {
 // Данный метод переодически запускает сканирование новых файлов в удаленном хранилище
 func (e *Engine) scanNewFiles(ctx context.Context, duration time.Duration, inputPath string) {
 	ticker := time.NewTicker(duration)
+	defer ticker.Stop()
 	e.log.Logf("[DEBUG] scan loop started")
 
 	for {
@@ -58,48 +59,53 @@ func (e *Engine) scanNewFiles(ctx context.Context, duration time.Duration, input
 			return
 		case <-ticker.C:
 			e.log.Logf("[DEBUG] scan started")
-
-			files, err := e.scanner.Scan(e.config, inputPath)
-			if err != nil {
+			if err := e.scanNewFilesOnce(inputPath); err != nil {
 				e.log.Logf("[ERROR] failed to scan files: %v", err)
-				continue
-			}
-
-			e.log.Logf("[DEBUG] scanning completed: %d files found", len(files))
-
-			for _, file := range files {
-				localPath, err := e.findLocalFile(file)
-				switch {
-				case err == nil:
-					e.log.Logf("[INFO] file %s already exists locally at %s", file.Name, localPath)
-					if e.config.RemoveRemote {
-						if err := e.deleteRemoteIfConfirmed(file); err != nil {
-							e.log.Logf("[ERROR] failed to delete confirmed remote file %s: %v", file.Name, err)
-						}
-					}
-					continue
-				case !errors.Is(err, ErrLocalFileNotFound):
-					e.log.Logf("[ERROR] failed to check local copy of %s: %v", file.Name, err)
-					continue
-				}
-
-				err = e.queue.Exists(file.ID)
-				switch err {
-				case nil:
-					e.log.Logf("[DEBUG] file %s already exists in queue", file.Name)
-				case ErrNotFound:
-					e.log.Logf("[DEBUG] file %s not found in queue", file.Name)
-					if err := e.queue.Add(file); err != nil {
-						e.log.Logf("[ERROR] failed to add file %s to queue: %v", file.Name, err)
-					}
-				default:
-					e.log.Logf("[ERROR] failed to check file %s in queue: %v", file.Name, err)
-				}
 			}
 		default:
 			time.Sleep(time.Millisecond * 100)
 		}
 	}
+}
+
+func (e *Engine) scanNewFilesOnce(inputPath string) error {
+	files, err := e.scanner.Scan(e.config, inputPath)
+	if err != nil {
+		return err
+	}
+
+	e.log.Logf("[DEBUG] scanning completed: %d files found", len(files))
+	for _, file := range files {
+		localPath, err := e.findLocalFile(file)
+		switch {
+		case err == nil:
+			e.log.Logf("[INFO] file %s already exists locally at %s", file.Name, localPath)
+			if e.config.RemoveRemote {
+				if err := e.deleteRemoteIfConfirmed(file); err != nil {
+					e.log.Logf("[ERROR] failed to delete confirmed remote file %s: %v", file.Name, err)
+				}
+			}
+			continue
+		case !errors.Is(err, ErrLocalFileNotFound):
+			e.log.Logf("[ERROR] failed to check local copy of %s: %v", file.Name, err)
+			continue
+		}
+
+		err = e.queue.Exists(file.ID)
+		switch err {
+		case nil:
+			e.log.Logf("[DEBUG] file %s already exists in queue", file.Name)
+		case ErrNotFound:
+			e.log.Logf("[DEBUG] file %s not found in queue", file.Name)
+			if err := e.queue.Add(file); err != nil {
+				e.log.Logf("[ERROR] failed to add file %s to queue: %v", file.Name, err)
+			}
+		default:
+			e.log.Logf("[ERROR] failed to check file %s in queue: %v", file.Name, err)
+		}
+	}
+
+	return nil
 }
 
 // Данный метод запускает воркеры загрузки файлов
