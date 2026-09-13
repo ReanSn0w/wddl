@@ -10,6 +10,7 @@ import (
 	"syscall"
 
 	"github.com/ReanSn0w/wddl/pkg/config"
+	"github.com/ReanSn0w/wddl/pkg/control"
 	"github.com/ReanSn0w/wddl/pkg/daemon"
 	"github.com/ReanSn0w/wddl/pkg/engine"
 	"github.com/ReanSn0w/wddl/pkg/files"
@@ -37,15 +38,14 @@ func run(args []string, stdout, stderr io.Writer, getenv func(string) string) in
 		fmt.Fprintf(stderr, "wddl: %v\n", err)
 		return 2
 	}
-	if parsed.Command != "run" {
-		fmt.Fprintf(stderr, "wddl: %v\n", unsupportedCommand(parsed.Command))
-		return 1
-	}
-
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	if err := runDaemon(ctx, parsed.Options.ConfigPath, getenv); err != nil {
+	if err := executeCommand(ctx, parsed, stdout, getenv); err != nil {
 		fmt.Fprintf(stderr, "wddl: %v\n", err)
+		var apiErr *control.APIError
+		if errors.As(err, &apiErr) && apiErr.Code == control.CodePartial {
+			return 3
+		}
 		return 1
 	}
 	return 0

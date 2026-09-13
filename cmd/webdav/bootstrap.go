@@ -2,7 +2,6 @@ package main
 
 import (
 	"errors"
-	"fmt"
 	"strings"
 
 	"github.com/ReanSn0w/wddl/pkg/config"
@@ -111,8 +110,4 @@ func toEngineConfig(conf config.Config) engine.Config {
 		TempPath: conf.Download.Temp, Concurrency: conf.Download.Workers,
 		ScanEvery: conf.Download.ScanEvery.Value(), RemoveRemote: conf.Download.RemoveRemote,
 	}
-}
-
-func unsupportedCommand(command string) error {
-	return fmt.Errorf("command %q is not available until the daemon control service is initialized", command)
 }
