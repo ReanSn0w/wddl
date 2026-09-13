@@ -39,6 +39,8 @@ type Engine struct {
 	eventSink     func(string, File, any)
 	deleteMutex   *sync.Mutex
 	lockMutex     *sync.Mutex // Protect runtime maps
+	loopsWG       sync.WaitGroup
+	tasksWG       sync.WaitGroup
 }
 
 func (e *Engine) SetEventSink(sink func(string, File, any)) { e.eventSink = sink }
@@ -54,10 +56,22 @@ func (e *Engine) Start(ctx context.Context) {
 	progressCH := make(chan Progress, e.config.Concurrency)
 
 	// Запуск воркеров для загрузки файлов
-	go e.downloadFiles(ctx, progressCH, e.config.Concurrency)
+	e.loopsWG.Add(2)
+	go func() { defer e.loopsWG.Done(); e.downloadFiles(ctx, progressCH, e.config.Concurrency) }()
 
 	// Запуск рутины отслеживания прогресса загрузки файлов
-	go e.progressPrinter(ctx, progressCH)
+	go func() { defer e.loopsWG.Done(); e.progressPrinter(ctx, progressCH) }()
+}
+
+func (e *Engine) Wait(ctx context.Context) error {
+	done := make(chan struct{})
+	go func() { e.loopsWG.Wait(); e.tasksWG.Wait(); close(done) }()
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 // ScanNow performs one synchronous remote scan. Long-lived callers should use
@@ -126,13 +140,20 @@ func (e *Engine) downloadFiles(ctx context.Context, pc chan<- Progress, limit in
 				continue
 			}
 
-			limiter <- struct{}{}
+			select {
+			case limiter <- struct{}{}:
+			case <-ctx.Done():
+				e.releaseFileLock(file.ID)
+				return
+			}
 
+			e.tasksWG.Add(1)
 			go func(f File) {
 				defer func() {
 					e.endActive(f.ID)
 					<-limiter
 					e.releaseFileLock(f.ID)
+					e.tasksWG.Done()
 				}()
 
 				err := e.filterTaskFromQueue(f)

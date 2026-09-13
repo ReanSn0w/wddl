@@ -149,6 +149,9 @@ func (d *Daemon) Run(ctx context.Context) error {
 	if err := server.Shutdown(shutdownCtx); err != nil {
 		return fmt.Errorf("shutdown control server: %w", err)
 	}
+	if err := d.engine.Wait(shutdownCtx); err != nil {
+		return fmt.Errorf("wait for active downloads: %w", err)
+	}
 	return nil
 }
 
