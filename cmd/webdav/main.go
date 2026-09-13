@@ -1,98 +1,95 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
-	"time"
+	"os/signal"
+	"syscall"
 
-	"git.papkovda.ru/library/gokit/pkg/app"
 	"github.com/ReanSn0w/wddl/pkg/config"
 	"github.com/ReanSn0w/wddl/pkg/engine"
 	"github.com/ReanSn0w/wddl/pkg/files"
 	"github.com/ReanSn0w/wddl/pkg/localindex"
 	"github.com/ReanSn0w/wddl/pkg/queue"
-	"github.com/ReanSn0w/wddl/pkg/utils"
 	"github.com/go-pkgz/lgr"
 	"github.com/studio-b12/gowebdav"
+	"github.com/umputun/go-flags"
 )
 
-var (
-	revision = "unknown"
-	opts     bootstrapOptions
-)
+var revision = "unknown"
 
 func main() {
-	app := app.New("Webdav Downloader", revision, &opts)
-	credentials, err := loadCredentials(os.Getenv)
+	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr, os.Getenv))
+}
+
+func run(args []string, stdout, stderr io.Writer, getenv func(string) string) int {
+	parsed, err := parseCLI(args)
 	if err != nil {
-		app.Log().Logf("[ERROR] credentials error: %v", err)
-		os.Exit(2)
+		var flagErr *flags.Error
+		if errors.As(err, &flagErr) && flagErr.Type == flags.ErrHelp {
+			fmt.Fprint(stdout, flagErr.Message)
+			return 0
+		}
+		fmt.Fprintf(stderr, "wddl: %v\n", err)
+		return 2
 	}
-	conf, err := config.Load(opts.ConfigPath)
+	if parsed.Command != "run" {
+		fmt.Fprintf(stderr, "wddl: %v\n", unsupportedCommand(parsed.Command))
+		return 1
+	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	if err := runDaemon(ctx, parsed.Options.ConfigPath, getenv); err != nil {
+		fmt.Fprintf(stderr, "wddl: %v\n", err)
+		return 1
+	}
+	return 0
+}
+
+func runDaemon(ctx context.Context, configPath string, getenv func(string) string) error {
+	credentials, err := loadCredentials(getenv)
 	if err != nil {
-		app.Log().Logf("[ERROR] configuration error: %v", err)
-		os.Exit(2)
+		return fmt.Errorf("credentials: %w", err)
+	}
+	conf, err := config.Load(configPath)
+	if err != nil {
+		return fmt.Errorf("configuration: %w", err)
 	}
 	log := configureLogger(conf.Logging.Debug)
 	log.Logf("[INFO] Application: Webdav Downloader (rev: %v)", revision)
 
 	if err := validateRoots(conf.ExistingFiles.Roots); err != nil {
-		log.Logf("[ERROR] existing files configuration error: %v", err)
-		os.Exit(2)
+		return fmt.Errorf("existing files configuration: %w", err)
 	}
-
 	var existingFiles engine.ExistingFileFinder
 	if len(conf.ExistingFiles.Roots) > 0 {
 		index := localindex.New(conf.ExistingFiles.Roots)
-		started := time.Now()
-		log.Logf("[INFO] initial local library scan started")
 		count, err := index.Refresh()
 		if err != nil {
-			log.Logf("[ERROR] initial local library scan failed: %v", err)
-			os.Exit(2)
+			return fmt.Errorf("initial local library scan: %w", err)
 		}
-		log.Logf("[INFO] initial local library scan completed: %d files in %v", count, time.Since(started).Round(time.Millisecond))
+		log.Logf("[INFO] initial local library scan completed: %d files", count)
 		existingFiles = index
-		go index.Run(app.Context(), log, conf.ExistingFiles.ScanEvery.Value())
+		go index.Run(ctx, log, conf.ExistingFiles.ScanEvery.Value())
 	}
 
-	{
-		engineConfig := toEngineConfig(conf)
-
-		wd := gowebdav.NewClient(conf.WebDAV.Server, credentials.User, credentials.Password)
-		err := wd.Connect()
-		if err != nil {
-			log.Logf("[ERROR] webdav error: %v", err)
-			os.Exit(2)
-		}
-
-		targetAction := targetAction()
-		switch targetAction {
-		case ActionClearRemote:
-			utils := utils.New(wd, conf.Download.Destination, conf.WebDAV.Root, existingFiles)
-			err := utils.ClearRemoteFiles()
-			if err != nil {
-				log.Logf("[ERROR] clear remote files error: %v", err)
-				os.Exit(2)
-			}
-
-			os.Exit(0)
-		default:
-			queue, err := queue.New(conf.Queue.File)
-			if err != nil {
-				log.Logf("[ERROR] queue error: %v", err)
-				os.Exit(2)
-			}
-
-			files := files.New(wd)
-
-			engine := engine.New(log, engineConfig, files, files, queue, existingFiles)
-			engine.Start(app.Context())
-		}
+	wd := gowebdav.NewClient(conf.WebDAV.Server, credentials.User, credentials.Password)
+	if err := wd.Connect(); err != nil {
+		return fmt.Errorf("webdav: %w", err)
 	}
-
-	app.GS(time.Second * 10)
+	tasks, err := queue.New(conf.Queue.File)
+	if err != nil {
+		return fmt.Errorf("queue: %w", err)
+	}
+	storage := files.New(wd)
+	downloader := engine.New(log, toEngineConfig(conf), storage, storage, tasks, existingFiles)
+	downloader.Start(ctx)
+	<-ctx.Done()
+	return nil
 }
 
 func configureLogger(debug bool) lgr.L {
@@ -113,7 +110,6 @@ func validateRoots(roots []string) error {
 		if !info.IsDir() {
 			return fmt.Errorf("library root %q is not a directory", root)
 		}
-
 		dir, err := os.Open(root)
 		if err != nil {
 			return fmt.Errorf("open library root %q: %w", root, err)
@@ -127,21 +123,5 @@ func validateRoots(roots []string) error {
 			return fmt.Errorf("close library root %q: %w", root, closeErr)
 		}
 	}
-
 	return nil
-}
-
-type Action string
-
-const (
-	ActionNone        Action = "none"
-	ActionClearRemote Action = "clear-remote"
-)
-
-func targetAction() Action {
-	if opts.Util.ClearRemote {
-		return ActionClearRemote
-	}
-
-	return ActionNone
 }
