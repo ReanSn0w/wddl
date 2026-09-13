@@ -2,6 +2,7 @@ package queue
 
 import (
 	"context"
+	"fmt"
 	"sort"
 	"sync"
 	"time"
@@ -24,6 +25,7 @@ func New(path string) (*Queue, error) {
 		path:          path,
 		items:         items,
 		changed:       make(chan struct{}, 1),
+		retryEvery:    3 * time.Second,
 		writeSnapshot: writeSnapshot,
 	}, nil
 }
@@ -35,11 +37,16 @@ type Queue struct {
 	items map[string]engine.File
 
 	changed       chan struct{}
+	retryEvery    time.Duration
 	writeSnapshot snapshotWriter
 }
 
 // Add - добавляет файл в очередь
 func (q *Queue) Add(file engine.File) error {
+	if err := validateFile(file); err != nil {
+		return fmt.Errorf("validate queue item: %w", err)
+	}
+
 	q.mx.Lock()
 	next := cloneItems(q.items)
 	next[file.ID] = file
@@ -140,7 +147,7 @@ func (q *Queue) Chan(ctx context.Context, log lgr.L, filter func(f engine.File) 
 	go func() {
 		defer close(ch)
 
-		ticker := time.NewTicker(time.Second * 3)
+		ticker := time.NewTicker(q.retryEvery)
 		defer ticker.Stop()
 
 		emit := func() bool {
