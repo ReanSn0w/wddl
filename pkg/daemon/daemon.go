@@ -100,6 +100,13 @@ func New(conf config.Config, revision string, log logger, downloader *engine.Eng
 		reloadCH: make(chan scheduleReload),
 	}
 	downloader.SetEventSink(func(eventType string, file engine.File, data any) {
+		if progress, ok := data.(engine.Progress); ok {
+			data = control.DownloadProgress{
+				ID: progress.ID, Name: progress.Name,
+				Percent: progress.Percent, Speed: progress.Speed,
+				Downloaded: progress.Downloaded, Size: progress.Size,
+			}
+		}
 		daemon.broker.Publish(control.Event{Type: eventType, ID: file.ID, Message: file.Name, Data: data})
 	})
 	downloader.SetDeleteMutex(deleteMu)

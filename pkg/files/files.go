@@ -26,12 +26,18 @@ type Webdav interface {
 
 func New(client Webdav) *Files {
 	return &Files{
-		client: client,
+		client:        client,
+		now:           time.Now,
+		progressEvery: time.Second,
+		sleep:         wait,
 	}
 }
 
 type Files struct {
-	client Webdav
+	client        Webdav
+	now           func() time.Time
+	progressEvery time.Duration
+	sleep         func(context.Context, time.Duration) error
 }
 
 func (f *Files) Scan(conf engine.Config, inputDir string) ([]engine.File, error) {
@@ -61,7 +67,11 @@ func (d *Files) Download(ctx context.Context, pch chan<- engine.Progress, file e
 	var lastErr error
 
 	lgr.Default().Logf("[DEBUG] download delay before starting (3 seconds)")
-	if err := wait(ctx, time.Second*3); err != nil {
+	sleep := d.sleep
+	if sleep == nil {
+		sleep = wait
+	}
+	if err := sleep(ctx, time.Second*3); err != nil {
 		return err
 	}
 
@@ -77,7 +87,7 @@ func (d *Files) Download(ctx context.Context, pch chan<- engine.Progress, file e
 			backoff := time.Duration(math.Pow(2, float64(attempt+1))) * time.Second
 			lgr.Default().Logf("[WARN] download attempt %d/%d failed for %s, retry in %v: %v",
 				attempt+1, maxRetries, file.ID, backoff, err)
-			if err := wait(ctx, backoff); err != nil {
+			if err := sleep(ctx, backoff); err != nil {
 				return err
 			}
 		}
@@ -109,6 +119,13 @@ func (f *Files) download(ctx context.Context, pch chan<- engine.Progress, file e
 
 	lgr.Default().Logf("[DEBUG] file %s progress: %d/%d partitions (%.2f%%)",
 		file.Name, stat.Done, stat.Count, stat.CompletePercent())
+	downloaded := stat.SkipBytes
+	if stat.IsComplete() {
+		downloaded = file.Size
+	}
+	if err := publishProgress(ctx, pch, newProgress(file, downloaded, 0), true); err != nil {
+		return err
+	}
 
 	if !stat.IsComplete() {
 		lgr.Default().Logf("[DEBUG] starting download stream for file %s from byte %d", file.Name, stat.SkipBytes)
@@ -128,12 +145,7 @@ func (f *Files) download(ctx context.Context, pch chan<- engine.Progress, file e
 		}()
 		defer close(streamDone)
 
-		pwc := &PartitionWriteCloser{
-			ProgressChan: pch,
-			File:         &file,
-			Path:         file.Temp,
-			CurrentIndex: int(stat.Done),
-		}
+		pwc := newPartitionWriteCloser(ctx, pch, &file, file.Temp, int(stat.Done), downloaded, f.now, f.progressEvery)
 
 		defer pwc.Close()
 
@@ -145,6 +157,12 @@ func (f *Files) download(ctx context.Context, pch chan<- engine.Progress, file e
 			return fmt.Errorf("failed to copy download data: %w", err)
 		}
 		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if err := pwc.Close(); err != nil {
+			return fmt.Errorf("failed to close download parts: %w", err)
+		}
+		if err := pwc.PublishProgress(true); err != nil {
 			return err
 		}
 

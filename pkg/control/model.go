@@ -3,7 +3,10 @@
 // the persistent queue format.
 package control
 
-import "time"
+import (
+	"encoding/json"
+	"time"
+)
 
 const APIVersion = "v1"
 
@@ -95,6 +98,55 @@ type Event struct {
 	Message string    `json:"message"`
 	Data    any       `json:"data,omitempty"`
 	Dropped uint64    `json:"dropped,omitempty"`
+}
+
+// DownloadProgress is the stable payload of a download.progress event. The
+// capitalized JSON field names preserve the v1 wire format that was originally
+// produced by engine.Progress without explicit JSON tags.
+type DownloadProgress struct {
+	ID         string  `json:"ID"`
+	Name       string  `json:"Name"`
+	Percent    float64 `json:"Percent"`
+	Speed      int64   `json:"Speed"`
+	Downloaded int64   `json:"Downloaded,omitempty"`
+	Size       int64   `json:"Size,omitempty"`
+}
+
+// UnmarshalJSON keeps arbitrary event payloads generic while making the
+// download.progress payload directly useful to human renderers.
+func (e *Event) UnmarshalJSON(data []byte) error {
+	var wire struct {
+		Time    time.Time       `json:"time"`
+		Type    string          `json:"type"`
+		ID      string          `json:"id,omitempty"`
+		Message string          `json:"message"`
+		Data    json.RawMessage `json:"data,omitempty"`
+		Dropped uint64          `json:"dropped,omitempty"`
+	}
+	if err := json.Unmarshal(data, &wire); err != nil {
+		return err
+	}
+
+	e.Time = wire.Time
+	e.Type = wire.Type
+	e.ID = wire.ID
+	e.Message = wire.Message
+	e.Dropped = wire.Dropped
+	e.Data = nil
+	if len(wire.Data) == 0 || string(wire.Data) == "null" {
+		return nil
+	}
+
+	if wire.Type == "download.progress" {
+		var progress DownloadProgress
+		if err := json.Unmarshal(wire.Data, &progress); err != nil {
+			return err
+		}
+		e.Data = progress
+		return nil
+	}
+
+	return json.Unmarshal(wire.Data, &e.Data)
 }
 
 type RemoteID struct {

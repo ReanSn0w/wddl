@@ -13,6 +13,11 @@ type outputOptions struct {
 	JSON bool `long:"json" description:"print machine-readable JSON"`
 }
 
+type watchCommand struct {
+	outputOptions
+	Plain bool `long:"plain" description:"print one text line per event without terminal control sequences"`
+}
+
 type emptyCommand struct{}
 
 type idCommand struct {
@@ -39,7 +44,7 @@ type cliOptions struct {
 
 	Run    emptyCommand  `command:"run" description:"run the downloader daemon"`
 	Status outputOptions `command:"status" description:"show a snapshot of daemon state"`
-	Watch  outputOptions `command:"watch" description:"stream daemon events until interrupted"`
+	Watch  watchCommand  `command:"watch" description:"show live daemon activity until interrupted"`
 	Scan   struct {
 		Remote outputOptions `command:"remote" description:"schedule a remote WebDAV scan"`
 		Local  outputOptions `command:"local" description:"schedule a local library scan"`
@@ -73,7 +78,7 @@ func parseCLI(args []string) (parsedCLI, error) {
 	var opts cliOptions
 	parser := flags.NewParser(&opts, flags.Default)
 	parser.Name = "wddl"
-	parser.LongDescription = "Download-only WebDAV daemon controlled over a local Unix socket.\n\nExamples:\n  wddl run\n  wddl status --json\n  wddl scan all\n  wddl cleanup remote"
+	parser.LongDescription = "Download-only WebDAV daemon controlled over a local Unix socket.\n\nExamples:\n  wddl run\n  wddl status --json\n  wddl watch\n  wddl watch --plain\n  wddl scan all\n  wddl cleanup remote"
 	if _, err := parser.ParseArgs(args); err != nil {
 		return parsedCLI{}, err
 	}
@@ -85,7 +90,11 @@ func parseCLI(args []string) (parsedCLI, error) {
 	if len(names) == 0 {
 		return parsedCLI{}, &flags.Error{Type: flags.ErrCommandRequired, Message: "a command is required"}
 	}
-	return parsedCLI{Options: opts, Command: strings.Join(names, " ")}, nil
+	command := strings.Join(names, " ")
+	if command == "watch" && opts.Watch.JSON && opts.Watch.Plain {
+		return parsedCLI{}, errors.New("watch: --json and --plain cannot be used together")
+	}
+	return parsedCLI{Options: opts, Command: command}, nil
 }
 
 type credentials struct {
