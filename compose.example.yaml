@@ -4,6 +4,13 @@ services:
     container_name: wddl
     restart: unless-stopped
     user: "${WDDL_UID:-10001}:${WDDL_GID:-10001}"
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=64m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
     environment:
       WDDL_CONFIG: /config/config.yaml
       WEBDAV_USER: "${WEBDAV_USER:?set WEBDAV_USER in the Synology project environment}"
