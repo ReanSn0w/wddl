@@ -14,6 +14,7 @@ type Config struct {
 	Queue         Queue         `yaml:"queue"`
 	ExistingFiles ExistingFiles `yaml:"existing_files"`
 	Logging       Logging       `yaml:"logging"`
+	Control       Control       `yaml:"control"`
 }
 
 type WebDAV struct {
@@ -40,6 +41,12 @@ type ExistingFiles struct {
 
 type Logging struct {
 	Debug bool `yaml:"debug"`
+}
+
+type Control struct {
+	Socket          string   `yaml:"socket"`
+	RequestTimeout  Duration `yaml:"request_timeout"`
+	ShutdownTimeout Duration `yaml:"shutdown_timeout"`
 }
 
 func (d Duration) Value() time.Duration {

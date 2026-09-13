@@ -29,6 +29,10 @@ existing_files:
   scan_every: 12h
 logging:
   debug: true
+control:
+  socket: /run/custom/wddl.sock
+  request_timeout: 12s
+  shutdown_timeout: 9s
 `)
 
 	got, err := Load(path)
@@ -50,6 +54,9 @@ logging:
 	if !got.Logging.Debug {
 		t.Fatal("Logging.Debug = false, want true")
 	}
+	if got.Control.Socket != "/run/custom/wddl.sock" || got.Control.RequestTimeout.Value() != 12*time.Second || got.Control.ShutdownTimeout.Value() != 9*time.Second {
+		t.Fatalf("Control config = %#v", got.Control)
+	}
 }
 
 func TestLoadAppliesDefaults(t *testing.T) {
@@ -66,6 +73,9 @@ func TestLoadAppliesDefaults(t *testing.T) {
 	}
 	if got.Queue.File != "./queue.json" || len(got.ExistingFiles.Roots) != 0 || got.ExistingFiles.ScanEvery.Value() != 24*time.Hour || got.Logging.Debug {
 		t.Fatalf("remaining defaults = queue %#v existing %#v logging %#v", got.Queue, got.ExistingFiles, got.Logging)
+	}
+	if got.Control.Socket != "/run/wddl/wddl.sock" || got.Control.RequestTimeout.Value() != 30*time.Second || got.Control.ShutdownTimeout.Value() != 10*time.Second {
+		t.Fatalf("control defaults = %#v", got.Control)
 	}
 }
 
@@ -114,6 +124,9 @@ func TestValidateRejectsInvalidFields(t *testing.T) {
 		{name: "zero local interval", mutate: func(c *Config) { c.ExistingFiles.ScanEvery = 0 }, want: "existing_files.scan_every"},
 		{name: "negative local interval", mutate: func(c *Config) { c.ExistingFiles.ScanEvery = Duration(-time.Second) }, want: "existing_files.scan_every"},
 		{name: "empty queue", mutate: func(c *Config) { c.Queue.File = "" }, want: "queue.file"},
+		{name: "relative socket", mutate: func(c *Config) { c.Control.Socket = "wddl.sock" }, want: "control.socket"},
+		{name: "zero request timeout", mutate: func(c *Config) { c.Control.RequestTimeout = 0 }, want: "control.request_timeout"},
+		{name: "zero shutdown timeout", mutate: func(c *Config) { c.Control.ShutdownTimeout = 0 }, want: "control.shutdown_timeout"},
 	}
 
 	for _, tt := range tests {

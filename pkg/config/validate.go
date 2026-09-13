@@ -51,6 +51,19 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("existing_files.scan_every: must be positive")
 	}
 	c.ExistingFiles.Roots = normalizeLocalPaths(c.ExistingFiles.Roots)
+	if err := cleanLocalPath("control.socket", &c.Control.Socket); err != nil {
+		return err
+	}
+	if !filepath.IsAbs(c.Control.Socket) {
+		return fmt.Errorf("control.socket: must be an absolute path")
+	}
+	c.Control.Socket = filepath.Clean(c.Control.Socket)
+	if c.Control.RequestTimeout.Value() <= 0 {
+		return fmt.Errorf("control.request_timeout: must be positive")
+	}
+	if c.Control.ShutdownTimeout.Value() <= 0 {
+		return fmt.Errorf("control.shutdown_timeout: must be positive")
+	}
 
 	return nil
 }
