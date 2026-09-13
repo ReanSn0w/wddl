@@ -21,6 +21,7 @@ var (
 	revision = "unknown"
 	opts     = struct {
 		app.Debug
+		ConfigPath string `long:"config" env:"WDDL_CONFIG" default:"./config.yaml" description:"path to YAML configuration"`
 
 		Input  string `short:"i" long:"input" env:"INPUT" default:"/" description:"input path"`
 		Temp   string `short:"t" long:"temp" env:"TEMP" default:"/tmp/wddl" description:"temporary path"`
@@ -35,9 +36,7 @@ var (
 		ExistingScanEvery time.Duration `long:"existing-files-scan-every" env:"EXISTING_FILES_SCAN_EVERY" default:"24h" description:"additional local library rescan interval"`
 
 		WebDav struct {
-			Server   string `long:"server" env:"SERVER" default:"https://dav.yandex.ru" description:"webdav server"`
-			User     string `long:"user" env:"USER" default:"guest" description:"webdav user"`
-			Password string `long:"password" env:"PASSWORD" description:"webdav password"`
+			Server string `long:"server" env:"SERVER" default:"https://dav.yandex.ru" description:"webdav server"`
 		} `group:"WebDav Сервер" namespace:"webdav" env-namespace:"WEBDAV"`
 
 		Util struct {
@@ -48,6 +47,11 @@ var (
 
 func main() {
 	app := app.New("Webdav Downloader", revision, &opts)
+	credentials, err := loadCredentials(os.Getenv)
+	if err != nil {
+		app.Log().Logf("[ERROR] credentials error: %v", err)
+		os.Exit(2)
+	}
 	opts.ExistingRoots = normalizeRoots(opts.ExistingRoots)
 	if opts.ExistingScanEvery <= 0 {
 		app.Log().Logf("[ERROR] existing files scan interval must be positive")
@@ -83,7 +87,7 @@ func main() {
 			RemoveRemote: opts.ClearRemote,
 		}
 
-		wd := gowebdav.NewClient(opts.WebDav.Server, opts.WebDav.User, opts.WebDav.Password)
+		wd := gowebdav.NewClient(opts.WebDav.Server, credentials.User, credentials.Password)
 		err := wd.Connect()
 		if err != nil {
 			app.Log().Logf("[ERROR] webdav error: %v", err)
