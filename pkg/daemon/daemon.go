@@ -529,8 +529,18 @@ func (d *Daemon) Reload(next config.Config) (control.ReloadResult, error) {
 		return result, &control.APIError{Status: http.StatusConflict, Code: control.CodeConflict, Message: result.Message, Matches: result.RestartFields}
 	}
 	reload := scheduleReload{remote: next.Download.ScanEvery.Value(), local: next.ExistingFiles.ScanEvery.Value(), done: make(chan struct{})}
-	d.reloadCH <- reload
-	<-reload.done
+	timeout := time.NewTimer(current.Control.RequestTimeout.Value())
+	defer timeout.Stop()
+	select {
+	case d.reloadCH <- reload:
+	case <-timeout.C:
+		return result, &control.APIError{Status: http.StatusServiceUnavailable, Code: control.CodeUnavailable, Message: "scheduler is unavailable"}
+	}
+	select {
+	case <-reload.done:
+	case <-timeout.C:
+		return result, &control.APIError{Status: http.StatusServiceUnavailable, Code: control.CodeUnavailable, Message: "scheduler reload timed out"}
+	}
 	configureRuntimeLogger(next.Logging.Debug)
 	result.Applied, result.Message = true, "configuration reloaded"
 	d.mu.Lock()

@@ -91,7 +91,8 @@ func (c *Client) Watch(ctx context.Context, consume func(Event) error) error {
 	if err != nil {
 		return err
 	}
-	response, err := c.http.Do(request)
+	streamClient := &http.Client{Transport: c.http.Transport}
+	response, err := streamClient.Do(request)
 	if err != nil {
 		return fmt.Errorf("connect to daemon: %w", err)
 	}

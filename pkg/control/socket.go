@@ -45,8 +45,10 @@ func Listen(socketPath string, handler http.Handler) (*SocketServer, error) {
 			Handler:           handler,
 			ReadHeaderTimeout: 5 * time.Second,
 			ReadTimeout:       35 * time.Second,
-			WriteTimeout:      35 * time.Second,
-			IdleTimeout:       60 * time.Second,
+			// Streaming watch responses intentionally have no whole-response
+			// deadline; request headers and bodies remain bounded.
+			WriteTimeout: 0,
+			IdleTimeout:  60 * time.Second,
 		},
 	}, nil
 }
