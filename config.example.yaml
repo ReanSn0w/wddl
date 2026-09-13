@@ -24,6 +24,6 @@ logging:
   debug: false
 
 control:
-  socket: /run/wddl/wddl.sock
+  socket: /data/state/wddl.sock
   request_timeout: 30s
   shutdown_timeout: 10s

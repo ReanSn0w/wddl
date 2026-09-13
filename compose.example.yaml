@@ -1,0 +1,24 @@
+services:
+  wddl:
+    image: ghcr.io/reansn0w/wddl:main
+    container_name: wddl
+    restart: unless-stopped
+    user: "${WDDL_UID:-10001}:${WDDL_GID:-10001}"
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=64m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      WDDL_CONFIG: /config/config.yaml
+      WEBDAV_USER: "${WEBDAV_USER:?set WEBDAV_USER in the Synology project environment}"
+      WEBDAV_PASSWORD: "${WEBDAV_PASSWORD:?set WEBDAV_PASSWORD in the Synology project environment}"
+    volumes:
+      - ./config.yaml:/config/config.yaml:ro
+      - /volume1/wddl/download:/data/download:rw
+      - /volume1/wddl/tmp:/data/tmp:rw
+      - /volume1/wddl/state:/data/state:rw
+      - /volume1/video/movies:/libraries/movies:ro
+      - /volume1/video/archive:/libraries/archive:ro

@@ -1,27 +1,37 @@
-FROM golang:1.24-alpine AS application
+# syntax=docker/dockerfile:1.12
 
-ARG TAG
-ADD . /bundle
+ARG GO_VERSION=1.24.13
+ARG ALPINE_VERSION=3.22
 
-WORKDIR /bundle
+FROM --platform=${BUILDPLATFORM} golang:${GO_VERSION}-alpine${ALPINE_VERSION} AS builder
 
-RUN apk --no-cache add ca-certificates
+ARG TARGETOS
+ARG TARGETARCH
+ARG TAG=unknown
 
-RUN \
-    revision=${TAG} && \
-    echo "Building container. Revision: ${revision}" && \
-    go build -ldflags "-X main.revision=${revision}" -o /srv/app ./cmd/webdav
+WORKDIR /src
 
-# Финальная сборка образа
-FROM scratch
-COPY --from=application /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
-COPY --from=application /srv /srv
+COPY go.mod go.sum ./
+RUN --mount=type=cache,target=/go/pkg/mod go mod download
+
+COPY . .
+RUN --mount=type=cache,target=/root/.cache/go-build \
+    CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
+    go build -trimpath -ldflags "-s -w -X main.revision=${TAG}" -o /out/wddl ./cmd/webdav
+
+FROM alpine:${ALPINE_VERSION} AS runtime
+
+RUN apk add --no-cache ca-certificates \
+    && addgroup -S -g 10001 wddl \
+    && adduser -S -D -H -u 10001 -G wddl wddl \
+    && mkdir -p /var/lib/wddl /run/wddl \
+    && chown wddl:wddl /var/lib/wddl /run/wddl
+COPY --from=builder /out/wddl /usr/local/bin/wddl
 
 ENV WDDL_CONFIG=/config/config.yaml
-ENV WEBDAV_USER=""
-ENV WEBDAV_PASSWORD=""
-VOLUME [ "/data" ]
 
-WORKDIR /srv
-ENTRYPOINT ["/srv/app"]
+WORKDIR /var/lib/wddl
+USER wddl:wddl
+HEALTHCHECK --interval=1m --timeout=10s --start-period=15m --retries=3 CMD ["wddl", "status", "--json"]
+ENTRYPOINT ["wddl"]
 CMD ["run"]
