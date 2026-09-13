@@ -9,11 +9,13 @@ import (
 	"time"
 
 	"git.papkovda.ru/library/gokit/pkg/app"
+	"github.com/ReanSn0w/wddl/pkg/config"
 	"github.com/ReanSn0w/wddl/pkg/engine"
 	"github.com/ReanSn0w/wddl/pkg/files"
 	"github.com/ReanSn0w/wddl/pkg/localindex"
 	"github.com/ReanSn0w/wddl/pkg/queue"
 	"github.com/ReanSn0w/wddl/pkg/utils"
+	"github.com/go-pkgz/lgr"
 	"github.com/studio-b12/gowebdav"
 )
 
@@ -52,74 +54,86 @@ func main() {
 		app.Log().Logf("[ERROR] credentials error: %v", err)
 		os.Exit(2)
 	}
-	opts.ExistingRoots = normalizeRoots(opts.ExistingRoots)
-	if opts.ExistingScanEvery <= 0 {
-		app.Log().Logf("[ERROR] existing files scan interval must be positive")
+	conf, err := config.Load(opts.ConfigPath)
+	if err != nil {
+		app.Log().Logf("[ERROR] configuration error: %v", err)
 		os.Exit(2)
 	}
-	if err := validateRoots(opts.ExistingRoots); err != nil {
-		app.Log().Logf("[ERROR] existing files configuration error: %v", err)
+	log := configureLogger(conf.Logging.Debug)
+	log.Logf("[INFO] Application: Webdav Downloader (rev: %v)", revision)
+
+	if err := validateRoots(conf.ExistingFiles.Roots); err != nil {
+		log.Logf("[ERROR] existing files configuration error: %v", err)
 		os.Exit(2)
 	}
 
 	var existingFiles engine.ExistingFileFinder
-	if len(opts.ExistingRoots) > 0 {
-		index := localindex.New(opts.ExistingRoots)
+	if len(conf.ExistingFiles.Roots) > 0 {
+		index := localindex.New(conf.ExistingFiles.Roots)
 		started := time.Now()
-		app.Log().Logf("[INFO] initial local library scan started")
+		log.Logf("[INFO] initial local library scan started")
 		count, err := index.Refresh()
 		if err != nil {
-			app.Log().Logf("[ERROR] initial local library scan failed: %v", err)
+			log.Logf("[ERROR] initial local library scan failed: %v", err)
 			os.Exit(2)
 		}
-		app.Log().Logf("[INFO] initial local library scan completed: %d files in %v", count, time.Since(started).Round(time.Millisecond))
+		log.Logf("[INFO] initial local library scan completed: %d files in %v", count, time.Since(started).Round(time.Millisecond))
 		existingFiles = index
-		go index.Run(app.Context(), app.Log(), opts.ExistingScanEvery)
+		go index.Run(app.Context(), log, conf.ExistingFiles.ScanEvery.Value())
 	}
 
 	{
-		config := engine.Config{
-			InputPath:    opts.Input,
-			OutputPath:   opts.Output,
-			TempPath:     opts.Temp,
-			Concurrency:  opts.Threads,
-			ScanEvery:    time.Second * time.Duration(opts.Timeout),
-			RemoveRemote: opts.ClearRemote,
+		engineConfig := engine.Config{
+			InputPath:    conf.WebDAV.Root,
+			OutputPath:   conf.Download.Destination,
+			TempPath:     conf.Download.Temp,
+			Concurrency:  conf.Download.Workers,
+			ScanEvery:    conf.Download.ScanEvery.Value(),
+			RemoveRemote: conf.Download.RemoveRemote,
 		}
 
-		wd := gowebdav.NewClient(opts.WebDav.Server, credentials.User, credentials.Password)
+		wd := gowebdav.NewClient(conf.WebDAV.Server, credentials.User, credentials.Password)
 		err := wd.Connect()
 		if err != nil {
-			app.Log().Logf("[ERROR] webdav error: %v", err)
+			log.Logf("[ERROR] webdav error: %v", err)
 			os.Exit(2)
 		}
 
 		targetAction := targetAction()
 		switch targetAction {
 		case ActionClearRemote:
-			utils := utils.New(wd, opts.Output, opts.Input, existingFiles)
+			utils := utils.New(wd, conf.Download.Destination, conf.WebDAV.Root, existingFiles)
 			err := utils.ClearRemoteFiles()
 			if err != nil {
-				app.Log().Logf("[ERROR] clear remote files error: %v", err)
+				log.Logf("[ERROR] clear remote files error: %v", err)
 				os.Exit(2)
 			}
 
 			os.Exit(0)
 		default:
-			queue, err := queue.New(opts.QueueFile)
+			queue, err := queue.New(conf.Queue.File)
 			if err != nil {
-				app.Log().Logf("[ERROR] queue error: %v", err)
+				log.Logf("[ERROR] queue error: %v", err)
 				os.Exit(2)
 			}
 
 			files := files.New(wd)
 
-			engine := engine.New(app.Log(), config, files, files, queue, existingFiles)
+			engine := engine.New(log, engineConfig, files, files, queue, existingFiles)
 			engine.Start(app.Context())
 		}
 	}
 
 	app.GS(time.Second * 10)
+}
+
+func configureLogger(debug bool) lgr.L {
+	options := []lgr.Option{lgr.Msec, lgr.LevelBraces}
+	if debug {
+		options = append(options, lgr.Debug, lgr.CallerFile, lgr.CallerFunc)
+	}
+	lgr.Setup(options...)
+	return lgr.Default()
 }
 
 func normalizeRoots(roots []string) []string {
