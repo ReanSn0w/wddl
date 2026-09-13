@@ -37,10 +37,12 @@ type Engine struct {
 	active        map[string]ActiveDownload
 	cancels       map[string]context.CancelFunc
 	eventSink     func(string, File, any)
+	deleteMutex   *sync.Mutex
 	lockMutex     *sync.Mutex // Protect runtime maps
 }
 
 func (e *Engine) SetEventSink(sink func(string, File, any)) { e.eventSink = sink }
+func (e *Engine) SetDeleteMutex(mutex *sync.Mutex)          { e.deleteMutex = mutex }
 
 func (e *Engine) publish(eventType string, file File, data any) {
 	if e.eventSink != nil {
@@ -309,6 +311,10 @@ func (e *Engine) findLocalFile(file File) (string, error) {
 }
 
 func (e *Engine) deleteRemoteIfConfirmed(file File) error {
+	if e.deleteMutex != nil {
+		e.deleteMutex.Lock()
+		defer e.deleteMutex.Unlock()
+	}
 	if _, err := e.findLocalFile(file); err != nil {
 		if errors.Is(err, ErrLocalFileNotFound) {
 			return errors.New("local copy is no longer available")

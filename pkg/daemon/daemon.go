@@ -4,6 +4,9 @@ package daemon
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -21,6 +24,7 @@ import (
 type localIndex interface {
 	Refresh() (int, error)
 	Len() int
+	Find(string, int64) (string, error)
 }
 
 type queueView interface {
@@ -40,37 +44,54 @@ type remoteStore interface {
 }
 
 type Daemon struct {
-	mu       sync.RWMutex
-	config   config.Config
-	revision string
-	started  time.Time
-	stopping bool
-	engine   *engine.Engine
-	queue    queueView
-	index    localIndex
-	log      logger
-	server   *control.SocketServer
-	remoteCH chan struct{}
-	localCH  chan struct{}
-	allCH    chan struct{}
-	remoteMu sync.Mutex
-	localMu  sync.Mutex
-	remote   control.ScanState
-	local    control.ScanState
-	broker   *control.Broker
-	remoteFS remoteStore
+	mu        sync.RWMutex
+	config    config.Config
+	revision  string
+	started   time.Time
+	stopping  bool
+	engine    *engine.Engine
+	queue     queueView
+	index     localIndex
+	log       logger
+	server    *control.SocketServer
+	remoteCH  chan struct{}
+	localCH   chan struct{}
+	allCH     chan struct{}
+	remoteMu  sync.Mutex
+	localMu   sync.Mutex
+	remote    control.ScanState
+	local     control.ScanState
+	broker    *control.Broker
+	remoteFS  remoteStore
+	cleanupMu sync.Mutex
+	previews  map[string]cleanupSnapshot
+	deleteMu  *sync.Mutex
+}
+
+type cleanupSnapshot struct {
+	expires time.Time
+	files   []cleanupFile
+}
+
+type cleanupFile struct {
+	file      engine.File
+	localPath string
 }
 
 func New(conf config.Config, revision string, log logger, downloader *engine.Engine, tasks queueView, index localIndex, remote remoteStore) *Daemon {
+	deleteMu := &sync.Mutex{}
 	daemon := &Daemon{
 		config: conf, revision: revision, log: log, engine: downloader, queue: tasks, index: index,
 		remoteCH: make(chan struct{}, 1), localCH: make(chan struct{}, 1), allCH: make(chan struct{}, 1),
 		broker:   control.NewBroker(),
 		remoteFS: remote,
+		previews: make(map[string]cleanupSnapshot),
+		deleteMu: deleteMu,
 	}
 	downloader.SetEventSink(func(eventType string, file engine.File, data any) {
 		daemon.broker.Publish(control.Event{Type: eventType, ID: file.ID, Message: file.Name, Data: data})
 	})
+	downloader.SetDeleteMutex(deleteMu)
 	return daemon
 }
 
@@ -407,10 +428,67 @@ func (d *Daemon) ResolveRemoteID(remotePath string) (control.RemoteID, error) {
 	return control.RemoteID{Type: "remote_file", Path: normalized, Name: info.Name(), Size: info.Size(), ID: file.ID}, nil
 }
 func (d *Daemon) CleanupPreview() (control.CleanupPreview, error) {
-	return control.CleanupPreview{}, unavailable("remote cleanup")
+	d.cleanupMu.Lock()
+	defer d.cleanupMu.Unlock()
+	files, err := d.cleanupCandidates(d.config.WebDAV.Root)
+	if err != nil {
+		return control.CleanupPreview{}, err
+	}
+	sort.Slice(files, func(i, j int) bool { return files[i].file.Source < files[j].file.Source })
+	bytes := make([]byte, 24)
+	if _, err := rand.Read(bytes); err != nil {
+		return control.CleanupPreview{}, fmt.Errorf("create cleanup token: %w", err)
+	}
+	token, expires := hex.EncodeToString(bytes), time.Now().Add(10*time.Minute)
+	d.previews[token] = cleanupSnapshot{expires: expires, files: files}
+	result := control.CleanupPreview{Token: token, ExpiresAt: expires, Count: len(files)}
+	for _, candidate := range files {
+		result.Files = append(result.Files, control.CleanupCandidate{Path: candidate.file.Source, LocalPath: candidate.localPath, Size: candidate.file.Size})
+		result.TotalSize += candidate.file.Size
+	}
+	d.broker.Publish(control.Event{Type: "cleanup.preview", Message: fmt.Sprintf("%d remote files confirmed locally", result.Count), Data: result})
+	return result, nil
 }
-func (d *Daemon) CleanupConfirm(string) (control.CleanupResult, error) {
-	return control.CleanupResult{}, unavailable("remote cleanup")
+func (d *Daemon) CleanupConfirm(token string) (control.CleanupResult, error) {
+	d.cleanupMu.Lock()
+	defer d.cleanupMu.Unlock()
+	snapshot, ok := d.previews[token]
+	delete(d.previews, token)
+	if !ok || time.Now().After(snapshot.expires) {
+		return control.CleanupResult{}, &control.APIError{Status: http.StatusConflict, Code: control.CodeConflict, Message: "cleanup token is invalid or expired"}
+	}
+	d.deleteMu.Lock()
+	defer d.deleteMu.Unlock()
+	result := control.CleanupResult{}
+	for _, candidate := range snapshot.files {
+		localPath, err := engine.FindLocalCopy(candidate.file, d.index)
+		if err != nil {
+			if errors.Is(err, engine.ErrLocalFileNotFound) {
+				result.Skipped++
+				continue
+			}
+			result.Failed++
+			result.Errors = append(result.Errors, fmt.Sprintf("%s: revalidate local copy: %v", candidate.file.Source, err))
+			continue
+		}
+		if localPath == "" {
+			result.Skipped++
+			continue
+		}
+		info, err := d.remoteFS.Stat(candidate.file.Source)
+		if err != nil || info.IsDir() || info.Name() != candidate.file.Name || info.Size() != candidate.file.Size {
+			result.Skipped++
+			continue
+		}
+		if err := d.remoteFS.Remove(candidate.file.Source); err != nil {
+			result.Failed++
+			result.Errors = append(result.Errors, fmt.Sprintf("%s: %v", candidate.file.Source, err))
+			continue
+		}
+		result.Deleted++
+	}
+	d.broker.Publish(control.Event{Type: "cleanup.completed", Message: fmt.Sprintf("deleted %d, skipped %d, failed %d", result.Deleted, result.Skipped, result.Failed), Data: result})
+	return result, nil
 }
 func (d *Daemon) Reload(config.Config) (control.ReloadResult, error) {
 	return control.ReloadResult{}, unavailable("configuration reload")
@@ -454,6 +532,35 @@ func normalizeRemotePath(root, value string) (string, error) {
 	}
 	if result != root && !strings.HasPrefix(result, strings.TrimSuffix(root, "/")+"/") {
 		return "", &control.APIError{Status: http.StatusBadRequest, Code: control.CodeInvalidRequest, Message: "remote path is outside webdav.root"}
+	}
+	return result, nil
+}
+
+func (d *Daemon) cleanupCandidates(dir string) ([]cleanupFile, error) {
+	items, err := d.remoteFS.ReadDir(dir)
+	if err != nil {
+		return nil, fmt.Errorf("scan remote cleanup candidates: %w", err)
+	}
+	var result []cleanupFile
+	for _, info := range items {
+		remotePath := path.Join(dir, info.Name())
+		if info.IsDir() {
+			nested, err := d.cleanupCandidates(remotePath)
+			if err != nil {
+				return nil, err
+			}
+			result = append(result, nested...)
+			continue
+		}
+		file := engine.NewFile(engine.Config{InputPath: d.config.WebDAV.Root, OutputPath: d.config.Download.Destination, TempPath: d.config.Download.Temp}, remotePath, info.Size())
+		localPath, err := engine.FindLocalCopy(file, d.index)
+		if errors.Is(err, engine.ErrLocalFileNotFound) {
+			continue
+		}
+		if err != nil {
+			return nil, fmt.Errorf("find local copy for %s: %w", remotePath, err)
+		}
+		result = append(result, cleanupFile{file: file, localPath: localPath})
 	}
 	return result, nil
 }
