@@ -93,7 +93,7 @@ func main() {
 		targetAction := targetAction()
 		switch targetAction {
 		case ActionClearRemote:
-			utils := utils.New(wd, opts.Output, opts.Input)
+			utils := utils.New(wd, opts.Output, opts.Input, existingFiles)
 			err := utils.ClearRemoteFiles()
 			if err != nil {
 				app.Log().Logf("[ERROR] clear remote files error: %v", err)

@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"sync"
 	"time"
 
@@ -73,6 +72,11 @@ func (e *Engine) scanNewFiles(ctx context.Context, duration time.Duration, input
 				switch {
 				case err == nil:
 					e.log.Logf("[INFO] file %s already exists locally at %s", file.Name, localPath)
+					if e.config.RemoveRemote {
+						if err := e.deleteRemoteIfConfirmed(file); err != nil {
+							e.log.Logf("[ERROR] failed to delete confirmed remote file %s: %v", file.Name, err)
+						}
+					}
 					continue
 				case !errors.Is(err, ErrLocalFileNotFound):
 					e.log.Logf("[ERROR] failed to check local copy of %s: %v", file.Name, err)
@@ -142,9 +146,8 @@ func (e *Engine) downloadFiles(ctx context.Context, pc chan<- Progress, limit in
 					}
 
 					if e.config.RemoveRemote {
-						err = e.downloader.Delete(f)
-						if err != nil {
-							e.log.Logf("[ERROR] failed to delete remote file %s from downloader: %v", f.Name, err)
+						if err := e.deleteRemoteIfConfirmed(f); err != nil {
+							e.log.Logf("[ERROR] failed to delete confirmed remote file %s: %v", f.Name, err)
 						}
 					}
 				}
@@ -226,27 +229,29 @@ func (e *Engine) filterTaskFromQueue(file File) error {
 		e.log.Logf("[ERROR] failed to delete file %s from queue: %v", file.Name, err)
 		return err
 	}
+	if e.config.RemoveRemote {
+		if err := e.deleteRemoteIfConfirmed(file); err != nil {
+			e.log.Logf("[ERROR] failed to delete confirmed remote file %s: %v", file.Name, err)
+		}
+	}
 
 	return errors.New("file already exists locally")
 }
 
 func (e *Engine) findLocalFile(file File) (string, error) {
-	stat, err := os.Stat(file.Dest)
-	if err == nil {
-		if stat.Mode().IsRegular() && stat.Size() == file.Size {
-			return file.Dest, nil
+	return FindLocalCopy(file, e.existingFiles)
+}
+
+func (e *Engine) deleteRemoteIfConfirmed(file File) error {
+	if _, err := e.findLocalFile(file); err != nil {
+		if errors.Is(err, ErrLocalFileNotFound) {
+			return errors.New("local copy is no longer available")
 		}
-	} else if !os.IsNotExist(err) {
-		return "", fmt.Errorf("stat destination %q: %w", file.Dest, err)
+		return fmt.Errorf("revalidate local copy: %w", err)
 	}
 
-	if e.existingFiles == nil {
-		return "", ErrLocalFileNotFound
+	if err := e.downloader.Delete(file); err != nil {
+		return fmt.Errorf("delete remote file: %w", err)
 	}
-
-	path, err := e.existingFiles.Find(file.Name, file.Size)
-	if err != nil {
-		return "", err
-	}
-	return path, nil
+	return nil
 }
