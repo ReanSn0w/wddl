@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"path"
+	"reflect"
 	"sort"
 	"strings"
 	"sync"
@@ -19,6 +20,7 @@ import (
 	"github.com/ReanSn0w/wddl/pkg/config"
 	"github.com/ReanSn0w/wddl/pkg/control"
 	"github.com/ReanSn0w/wddl/pkg/engine"
+	"github.com/go-pkgz/lgr"
 )
 
 type localIndex interface {
@@ -44,28 +46,36 @@ type remoteStore interface {
 }
 
 type Daemon struct {
-	mu        sync.RWMutex
-	config    config.Config
-	revision  string
-	started   time.Time
-	stopping  bool
-	engine    *engine.Engine
-	queue     queueView
-	index     localIndex
-	log       logger
-	server    *control.SocketServer
-	remoteCH  chan struct{}
-	localCH   chan struct{}
-	allCH     chan struct{}
-	remoteMu  sync.Mutex
-	localMu   sync.Mutex
-	remote    control.ScanState
-	local     control.ScanState
-	broker    *control.Broker
-	remoteFS  remoteStore
-	cleanupMu sync.Mutex
-	previews  map[string]cleanupSnapshot
-	deleteMu  *sync.Mutex
+	mu         sync.RWMutex
+	config     config.Config
+	revision   string
+	started    time.Time
+	stopping   bool
+	engine     *engine.Engine
+	queue      queueView
+	index      localIndex
+	log        logger
+	server     *control.SocketServer
+	remoteCH   chan struct{}
+	localCH    chan struct{}
+	allCH      chan struct{}
+	remoteMu   sync.Mutex
+	localMu    sync.Mutex
+	remote     control.ScanState
+	local      control.ScanState
+	broker     *control.Broker
+	remoteFS   remoteStore
+	cleanupMu  sync.Mutex
+	previews   map[string]cleanupSnapshot
+	deleteMu   *sync.Mutex
+	reloadCH   chan scheduleReload
+	lastReload *control.ReloadResult
+}
+
+type scheduleReload struct {
+	remote time.Duration
+	local  time.Duration
+	done   chan struct{}
 }
 
 type cleanupSnapshot struct {
@@ -87,6 +97,7 @@ func New(conf config.Config, revision string, log logger, downloader *engine.Eng
 		remoteFS: remote,
 		previews: make(map[string]cleanupSnapshot),
 		deleteMu: deleteMu,
+		reloadCH: make(chan scheduleReload),
 	}
 	downloader.SetEventSink(func(eventType string, file engine.File, data any) {
 		daemon.broker.Publish(control.Event{Type: eventType, ID: file.ID, Message: file.Name, Data: data})
@@ -179,6 +190,7 @@ func (d *Daemon) Status() control.Status {
 	d.mu.RLock()
 	status.RemoteScan = d.remote
 	status.LocalScan = d.local
+	status.LastReload = d.lastReload
 	status.Errors = map[string]string{}
 	if d.remote.LastError != "" {
 		status.Errors["remote_scan"] = d.remote.LastError
@@ -245,8 +257,9 @@ func (d *Daemon) TriggerScan(kind control.ScanKind) (control.ScanAccepted, error
 }
 
 func (d *Daemon) runScheduler(ctx context.Context) {
-	remoteTicker := time.NewTicker(d.config.Download.ScanEvery.Value())
-	localTicker := time.NewTicker(d.config.ExistingFiles.ScanEvery.Value())
+	remoteEvery, localEvery := d.config.Download.ScanEvery.Value(), d.config.ExistingFiles.ScanEvery.Value()
+	remoteTicker := time.NewTicker(remoteEvery)
+	localTicker := time.NewTicker(localEvery)
 	defer remoteTicker.Stop()
 	defer localTicker.Stop()
 	d.mu.Lock()
@@ -257,15 +270,24 @@ func (d *Daemon) runScheduler(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			return
+		case reload := <-d.reloadCH:
+			remoteTicker.Stop()
+			localTicker.Stop()
+			remoteEvery, localEvery = reload.remote, reload.local
+			remoteTicker, localTicker = time.NewTicker(remoteEvery), time.NewTicker(localEvery)
+			rn, ln := time.Now().Add(remoteEvery), time.Now().Add(localEvery)
+			d.setNext(control.ScanRemote, rn)
+			d.setNext(control.ScanLocal, ln)
+			close(reload.done)
 		case <-remoteTicker.C:
 			d.markScheduled(control.ScanRemote)
 			go d.runRemoteScan()
-			next := time.Now().Add(d.config.Download.ScanEvery.Value())
+			next := time.Now().Add(remoteEvery)
 			d.setNext(control.ScanRemote, next)
 		case <-localTicker.C:
 			d.markScheduled(control.ScanLocal)
 			go d.runLocalScan()
-			next := time.Now().Add(d.config.ExistingFiles.ScanEvery.Value())
+			next := time.Now().Add(localEvery)
 			d.setNext(control.ScanLocal, next)
 		case <-d.remoteCH:
 			go d.runRemoteScan()
@@ -490,8 +512,33 @@ func (d *Daemon) CleanupConfirm(token string) (control.CleanupResult, error) {
 	d.broker.Publish(control.Event{Type: "cleanup.completed", Message: fmt.Sprintf("deleted %d, skipped %d, failed %d", result.Deleted, result.Skipped, result.Failed), Data: result})
 	return result, nil
 }
-func (d *Daemon) Reload(config.Config) (control.ReloadResult, error) {
-	return control.ReloadResult{}, unavailable("configuration reload")
+func (d *Daemon) Reload(next config.Config) (control.ReloadResult, error) {
+	result := control.ReloadResult{At: time.Now()}
+	if err := next.Validate(); err != nil {
+		result.Message = err.Error()
+		d.recordReload(result)
+		return result, &control.APIError{Status: http.StatusBadRequest, Code: control.CodeInvalidRequest, Message: err.Error()}
+	}
+	d.mu.RLock()
+	current := d.config
+	d.mu.RUnlock()
+	result.RestartFields = immutableChanges(current, next)
+	if len(result.RestartFields) > 0 {
+		result.Message = "configuration contains fields that require a restart"
+		d.recordReload(result)
+		return result, &control.APIError{Status: http.StatusConflict, Code: control.CodeConflict, Message: result.Message, Matches: result.RestartFields}
+	}
+	reload := scheduleReload{remote: next.Download.ScanEvery.Value(), local: next.ExistingFiles.ScanEvery.Value(), done: make(chan struct{})}
+	d.reloadCH <- reload
+	<-reload.done
+	configureRuntimeLogger(next.Logging.Debug)
+	result.Applied, result.Message = true, "configuration reloaded"
+	d.mu.Lock()
+	d.config = next
+	d.lastReload = &result
+	d.mu.Unlock()
+	d.broker.Publish(control.Event{Type: "config.reloaded", Message: result.Message, Data: result})
+	return result, nil
 }
 
 var _ control.Service = (*Daemon)(nil)
@@ -563,4 +610,50 @@ func (d *Daemon) cleanupCandidates(dir string) ([]cleanupFile, error) {
 		result = append(result, cleanupFile{file: file, localPath: localPath})
 	}
 	return result, nil
+}
+
+func (d *Daemon) recordReload(result control.ReloadResult) {
+	d.mu.Lock()
+	d.lastReload = &result
+	d.mu.Unlock()
+}
+
+func immutableChanges(current, next config.Config) []string {
+	var fields []string
+	if current.Version != next.Version {
+		fields = append(fields, "version")
+	}
+	if current.WebDAV != next.WebDAV {
+		fields = append(fields, "webdav")
+	}
+	if current.Download.Destination != next.Download.Destination {
+		fields = append(fields, "download.destination")
+	}
+	if current.Download.Temp != next.Download.Temp {
+		fields = append(fields, "download.temp")
+	}
+	if current.Download.Workers != next.Download.Workers {
+		fields = append(fields, "download.workers")
+	}
+	if current.Download.RemoveRemote != next.Download.RemoveRemote {
+		fields = append(fields, "download.remove_remote")
+	}
+	if current.Queue != next.Queue {
+		fields = append(fields, "queue.file")
+	}
+	if !reflect.DeepEqual(current.ExistingFiles.Roots, next.ExistingFiles.Roots) {
+		fields = append(fields, "existing_files.roots")
+	}
+	if current.Control != next.Control {
+		fields = append(fields, "control")
+	}
+	return fields
+}
+
+func configureRuntimeLogger(debug bool) {
+	options := []lgr.Option{lgr.Msec, lgr.LevelBraces}
+	if debug {
+		options = append(options, lgr.Debug, lgr.CallerFile, lgr.CallerFunc)
+	}
+	lgr.Setup(options...)
 }
