@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 
 	"github.com/ReanSn0w/wddl/pkg/config"
@@ -66,6 +67,9 @@ func runDaemon(ctx context.Context, configPath string, getenv func(string) strin
 	if err := validateRoots(conf.ExistingFiles.Roots); err != nil {
 		return fmt.Errorf("existing files configuration: %w", err)
 	}
+	if err := validateWritableDirs(conf.Download.Destination, conf.Download.Temp, filepath.Dir(conf.Queue.File)); err != nil {
+		return fmt.Errorf("writable storage configuration: %w", err)
+	}
 	index := localindex.New(conf.ExistingFiles.Roots)
 	var existingFiles engine.ExistingFileFinder
 	if len(conf.ExistingFiles.Roots) > 0 {
@@ -115,6 +119,27 @@ func validateRoots(roots []string) error {
 		}
 		if closeErr != nil {
 			return fmt.Errorf("close library root %q: %w", root, closeErr)
+		}
+	}
+	return nil
+}
+
+func validateWritableDirs(paths ...string) error {
+	for _, target := range paths {
+		if err := os.MkdirAll(target, 0o755); err != nil {
+			return fmt.Errorf("create %q: %w", target, err)
+		}
+		probe, err := os.CreateTemp(target, ".wddl-write-check-*")
+		if err != nil {
+			return fmt.Errorf("directory %q is not writable: %w", target, err)
+		}
+		name := probe.Name()
+		if err := probe.Close(); err != nil {
+			_ = os.Remove(name)
+			return fmt.Errorf("close write probe in %q: %w", target, err)
+		}
+		if err := os.Remove(name); err != nil {
+			return fmt.Errorf("remove write probe in %q: %w", target, err)
 		}
 	}
 	return nil

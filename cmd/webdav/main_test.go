@@ -140,3 +140,20 @@ func TestValidateRoots(t *testing.T) {
 		t.Fatal("validateRoots(missing) error = nil, want error")
 	}
 }
+
+func TestValidateWritableDirs(t *testing.T) {
+	target := filepath.Join(t.TempDir(), "nested")
+	if err := validateWritableDirs(target); err != nil {
+		t.Fatalf("validateWritableDirs() error = %v", err)
+	}
+	if info, err := os.Stat(target); err != nil || !info.IsDir() {
+		t.Fatalf("target was not created: %v", err)
+	}
+	file := filepath.Join(t.TempDir(), "file")
+	if err := os.WriteFile(file, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateWritableDirs(file); err == nil {
+		t.Fatal("file path accepted as directory")
+	}
+}

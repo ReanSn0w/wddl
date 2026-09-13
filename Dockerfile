@@ -21,11 +21,16 @@ RUN --mount=type=cache,target=/root/.cache/go-build \
 
 FROM alpine:${ALPINE_VERSION} AS runtime
 
-RUN apk add --no-cache ca-certificates
+RUN apk add --no-cache ca-certificates \
+    && addgroup -S -g 10001 wddl \
+    && adduser -S -D -H -u 10001 -G wddl wddl \
+    && mkdir -p /var/lib/wddl /run/wddl \
+    && chown wddl:wddl /var/lib/wddl /run/wddl
 COPY --from=builder /out/wddl /usr/local/bin/wddl
 
 ENV WDDL_CONFIG=/config/config.yaml
 
 WORKDIR /var/lib/wddl
+USER wddl:wddl
 ENTRYPOINT ["wddl"]
 CMD ["run"]
