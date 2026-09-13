@@ -27,3 +27,7 @@ Sync
 test
 __debug_*
 **.db
+queue.json
+**/queue.json
+.wddl-queue-*.tmp
+**/.wddl-queue-*.tmp

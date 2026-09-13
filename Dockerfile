@@ -25,7 +25,7 @@ ENV TEMP=./tmp
 ENV OUTPUT=./data
 ENV THREADS=4
 ENV TIMEOUT=600
-ENV DB_FILE=./wddl.db
+ENV QUEUE_FILE=/data/queue.json
 VOLUME [ "/data" ]
 
 WORKDIR /srv

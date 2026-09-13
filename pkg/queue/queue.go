@@ -1,180 +1,141 @@
 package queue
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
+	"fmt"
+	"sort"
+	"sync"
 	"time"
 
 	"github.com/ReanSn0w/wddl/pkg/engine"
-	"github.com/boltdb/bolt"
 	"github.com/go-pkgz/lgr"
 )
 
-var (
-	queueBucket = []byte("queue")
-)
-
 func New(path string) (*Queue, error) {
-	db, err := bolt.Open(path, 0600, nil)
+	if err := checkParentWritable(path); err != nil {
+		return nil, err
+	}
+
+	items, err := load(path)
 	if err != nil {
 		return nil, err
 	}
 
-	err = db.Update(func(tx *bolt.Tx) (err error) {
-		_, err = tx.CreateBucketIfNotExists(queueBucket)
-		if err != nil {
-			return err
-		}
-
-		return nil
-	})
-
-	if err != nil {
-		return nil, err
-	}
-
-	q := &Queue{
-		db: db,
-	}
-
-	return q, nil
+	return &Queue{
+		path:          path,
+		items:         items,
+		changed:       make(chan struct{}, 1),
+		retryEvery:    3 * time.Second,
+		writeSnapshot: writeSnapshot,
+	}, nil
 }
 
 type Queue struct {
-	db *bolt.DB
+	path string
+
+	mx    sync.RWMutex
+	items map[string]engine.File
+
+	changed       chan struct{}
+	retryEvery    time.Duration
+	writeSnapshot snapshotWriter
 }
 
 // Add - добавляет файл в очередь
 func (q *Queue) Add(file engine.File) error {
-	return q.db.Update(func(tx *bolt.Tx) error {
-		bucket, err := tx.CreateBucketIfNotExists(queueBucket)
-		if err != nil {
-			return err
-		}
+	if err := validateFile(file); err != nil {
+		return fmt.Errorf("validate queue item: %w", err)
+	}
 
-		key := []byte(file.ID)
+	q.mx.Lock()
+	next := cloneItems(q.items)
+	next[file.ID] = file
 
-		buf := new(bytes.Buffer)
-		err = json.NewEncoder(buf).Encode(file)
-		if err != nil {
-			return err
-		}
+	committed, err := q.writeSnapshot(q.path, next)
+	if committed {
+		q.items = next
+	}
+	q.mx.Unlock()
 
-		err = bucket.Put(key, buf.Bytes())
-		if err != nil {
-			return err
-		}
-
-		return nil
-	})
+	if committed {
+		q.notifyChanged()
+	}
+	if err != nil {
+		return err
+	}
+	return nil
 }
 
 // Exists - проверяет наличие файла в очереди
 // в случае его отсутствия возвращает ошибку
 func (q *Queue) Exists(id string) error {
-	return q.db.View(func(tx *bolt.Tx) error {
-		bucket := tx.Bucket(queueBucket)
-		if bucket == nil {
-			return engine.ErrNotFound
-		}
+	q.mx.RLock()
+	defer q.mx.RUnlock()
 
-		key := []byte(id)
-		if bucket.Get(key) == nil {
-			return engine.ErrNotFound
-		}
+	if _, exists := q.items[id]; !exists {
+		return engine.ErrNotFound
+	}
 
-		return nil
-	})
+	return nil
 }
 
 // Len - возвращает количество файлов в очереди
 // в случае их отсутствия возвращает (0, nil)
 func (q *Queue) Len() (int, error) {
-	var (
-		count int
-		err   error
-	)
+	q.mx.RLock()
+	defer q.mx.RUnlock()
 
-	err = q.db.View(func(tx *bolt.Tx) error {
-		bucket := tx.Bucket(queueBucket)
-		if bucket == nil {
-			return engine.ErrNotFound
-		}
-
-		count = bucket.Stats().KeyN
-		return nil
-	})
-
-	return count, err
+	return len(q.items), nil
 }
 
 // Stat - возвращает статистику состояния очереди
 func (q *Queue) Stat() (*engine.Stat, error) {
-	var (
-		stat engine.Stat
-		err  error
-	)
+	items := q.snapshot()
+	stat := &engine.Stat{Files: len(items)}
+	for _, file := range items {
+		stat.FullSize += file.Size
+	}
 
-	err = q.db.View(func(tx *bolt.Tx) error {
-		bucket := tx.Bucket(queueBucket)
-		if bucket == nil {
-			return engine.ErrNotFound
-		}
-
-		c := bucket.Cursor()
-		for k, v := c.First(); k != nil; k, v = c.Next() {
-			var file engine.File
-			err := json.NewDecoder(bytes.NewReader(v)).Decode(&file)
-			if err != nil {
-				return err
-			}
-
-			stat.Files++
-			stat.FullSize += file.Size
-		}
-
-		return nil
-	})
-
-	return &stat, err
+	return stat, nil
 }
 
 // List - возвращает список файлов из очереди
 // в случае случае их отсутсвия возвращает (nil, nil)
 func (q *Queue) List(filter func(f engine.File) error) ([]engine.File, error) {
-	var (
-		result []engine.File
-		err    error
-	)
+	items := q.snapshot()
+	result := make([]engine.File, 0, len(items))
+	ids := make([]string, 0, len(items))
+	for id := range items {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
 
-	err = q.db.View(func(tx *bolt.Tx) error {
-		bucket := tx.Bucket(queueBucket)
-		if bucket == nil {
-			return engine.ErrNotFound
+	for _, id := range ids {
+		file := items[id]
+		if filter != nil {
+			if err := filter(file); err != nil {
+				continue
+			}
 		}
 
-		c := bucket.Cursor()
-		for k, v := c.First(); k != nil; k, v = c.Next() {
-			var file engine.File
-			err := json.NewDecoder(bytes.NewReader(v)).Decode(&file)
-			if err != nil {
-				return err
-			}
+		result = append(result, file)
+	}
 
-			if filter != nil {
-				if err := filter(file); err != nil {
-					continue
-				}
-			}
+	return result, nil
+}
 
-			result = append(result, file)
-		}
+func (q *Queue) notifyChanged() {
+	select {
+	case q.changed <- struct{}{}:
+	default:
+	}
+}
 
-		return nil
-	})
+func (q *Queue) snapshot() map[string]engine.File {
+	q.mx.RLock()
+	defer q.mx.RUnlock()
 
-	return result, err
+	return cloneItems(q.items)
 }
 
 // Chan - возвращает канал с файлами из очереди
@@ -186,24 +147,43 @@ func (q *Queue) Chan(ctx context.Context, log lgr.L, filter func(f engine.File) 
 	go func() {
 		defer close(ch)
 
-		ticker := time.NewTicker(time.Second * 3)
+		ticker := time.NewTicker(q.retryEvery)
+		defer ticker.Stop()
+
+		emit := func() bool {
+			items, err := q.List(filter)
+			if err != nil {
+				log.Logf("[ERROR] listing files: %v", err)
+				return true
+			}
+
+			for _, item := range items {
+				select {
+				case ch <- item:
+				case <-ctx.Done():
+					return false
+				}
+			}
+
+			return true
+		}
+
+		if !emit() {
+			return
+		}
 
 		for {
 			select {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				items, err := q.List(filter)
-				if err != nil {
-					log.Logf("[ERROR] listing files: %v", err)
-					continue
+				if !emit() {
+					return
 				}
-
-				for _, item := range items {
-					ch <- item
+			case <-q.changed:
+				if !emit() {
+					return
 				}
-			default:
-				time.Sleep(time.Millisecond * 100)
 			}
 		}
 	}()
@@ -214,17 +194,22 @@ func (q *Queue) Chan(ctx context.Context, log lgr.L, filter func(f engine.File) 
 // Delete - удаляет файл из очереди
 // в случае его присутствия в очереди
 func (q *Queue) Delete(id string) error {
-	return q.db.Update(func(tx *bolt.Tx) error {
-		bucket := tx.Bucket(queueBucket)
-		if bucket == nil {
-			return nil
-		}
+	q.mx.Lock()
+	defer q.mx.Unlock()
 
-		key := []byte(id)
-		if bucket.Get(key) == nil {
-			return nil
-		}
+	if _, exists := q.items[id]; !exists {
+		return nil
+	}
 
-		return bucket.Delete(key)
-	})
+	next := cloneItems(q.items)
+	delete(next, id)
+
+	committed, err := q.writeSnapshot(q.path, next)
+	if committed {
+		q.items = next
+	}
+	if err != nil {
+		return err
+	}
+	return nil
 }

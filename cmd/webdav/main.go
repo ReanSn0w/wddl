@@ -21,7 +21,7 @@ var (
 		Temp   string `short:"t" long:"temp" env:"TEMP" default:"/tmp/wddl" description:"temporary path"`
 		Output string `short:"o" long:"output" env:"OUTPUT" default:"./download" description:"output path"`
 
-		DBFile      string `long:"db-file" env:"DB_FILE" default:"./wddl.db" description:"database file"`
+		QueueFile   string `long:"queue-file" env:"QUEUE_FILE" default:"./queue.json" description:"queue file"`
 		Threads     int    `long:"threads" env:"THREADS" default:"4" description:"parallel downloads"`
 		Timeout     int    `long:"timeout" env:"TIMEOUT" default:"600" description:"rescan timeout (seconds)"`
 		ClearRemote bool   `long:"clear-remote" env:"CLEAR_REMOTE" description:"clear remote files"`
@@ -70,7 +70,7 @@ func main() {
 
 			os.Exit(0)
 		default:
-			queue, err := queue.New(opts.DBFile)
+			queue, err := queue.New(opts.QueueFile)
 			if err != nil {
 				app.Log().Logf("[ERROR] queue error: %v", err)
 				os.Exit(2)
