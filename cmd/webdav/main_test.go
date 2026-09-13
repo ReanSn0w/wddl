@@ -3,17 +3,8 @@ package main
 import (
 	"os"
 	"path/filepath"
-	"reflect"
 	"testing"
 )
-
-func TestNormalizeRootsTrimsEmptyAndDuplicateValues(t *testing.T) {
-	got := normalizeRoots([]string{" /library/a ", "", "  ", "/library/b", "/library/a"})
-	want := []string{"/library/a", "/library/b"}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("normalizeRoots() = %#v, want %#v", got, want)
-	}
-}
 
 func TestValidateRoots(t *testing.T) {
 	root := t.TempDir()

@@ -4,8 +4,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
-	"strings"
 	"time"
 
 	"git.papkovda.ru/library/gokit/pkg/app"
@@ -22,24 +20,7 @@ import (
 var (
 	revision = "unknown"
 	opts     = struct {
-		app.Debug
 		ConfigPath string `long:"config" env:"WDDL_CONFIG" default:"./config.yaml" description:"path to YAML configuration"`
-
-		Input  string `short:"i" long:"input" env:"INPUT" default:"/" description:"input path"`
-		Temp   string `short:"t" long:"temp" env:"TEMP" default:"/tmp/wddl" description:"temporary path"`
-		Output string `short:"o" long:"output" env:"OUTPUT" default:"./download" description:"output path"`
-
-		QueueFile   string `long:"queue-file" env:"QUEUE_FILE" default:"./queue.json" description:"queue file"`
-		Threads     int    `long:"threads" env:"THREADS" default:"4" description:"parallel downloads"`
-		Timeout     int    `long:"timeout" env:"TIMEOUT" default:"600" description:"rescan timeout (seconds)"`
-		ClearRemote bool   `long:"clear-remote" env:"CLEAR_REMOTE" description:"clear remote files"`
-
-		ExistingRoots     []string      `long:"existing-root" env:"EXISTING_FILES_ROOTS" env-delim:"," description:"additional local library root (repeatable)"`
-		ExistingScanEvery time.Duration `long:"existing-files-scan-every" env:"EXISTING_FILES_SCAN_EVERY" default:"24h" description:"additional local library rescan interval"`
-
-		WebDav struct {
-			Server string `long:"server" env:"SERVER" default:"https://dav.yandex.ru" description:"webdav server"`
-		} `group:"WebDav Сервер" namespace:"webdav" env-namespace:"WEBDAV"`
 
 		Util struct {
 			ClearRemote bool `long:"clear-remote" env:"CLEAR_REMOTE" description:"clear remote files"`
@@ -134,27 +115,6 @@ func configureLogger(debug bool) lgr.L {
 	}
 	lgr.Setup(options...)
 	return lgr.Default()
-}
-
-func normalizeRoots(roots []string) []string {
-	result := make([]string, 0, len(roots))
-	seen := make(map[string]struct{}, len(roots))
-	for _, root := range roots {
-		root = strings.TrimSpace(root)
-		if root == "" {
-			continue
-		}
-
-		root = filepath.Clean(root)
-		if _, ok := seen[root]; ok {
-			continue
-		}
-
-		seen[root] = struct{}{}
-		result = append(result, root)
-	}
-
-	return result
 }
 
 func validateRoots(roots []string) error {
