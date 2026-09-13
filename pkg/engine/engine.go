@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"sync"
 	"time"
@@ -68,16 +69,14 @@ func (e *Engine) scanNewFiles(ctx context.Context, duration time.Duration, input
 			e.log.Logf("[DEBUG] scanning completed: %d files found", len(files))
 
 			for _, file := range files {
-				stat, err := os.Stat(file.Dest)
-				if err != nil && !os.IsNotExist(err) {
-					e.log.Logf("[ERROR] failed to stat file %s: %v", file.Name, err)
+				localPath, err := e.findLocalFile(file)
+				switch {
+				case err == nil:
+					e.log.Logf("[INFO] file %s already exists locally at %s", file.Name, localPath)
 					continue
-				}
-
-				if stat != nil {
-					if stat.Size() == file.Size {
-						continue
-					}
+				case !errors.Is(err, ErrLocalFileNotFound):
+					e.log.Logf("[ERROR] failed to check local copy of %s: %v", file.Name, err)
+					continue
 				}
 
 				err = e.queue.Exists(file.ID)
@@ -86,7 +85,9 @@ func (e *Engine) scanNewFiles(ctx context.Context, duration time.Duration, input
 					e.log.Logf("[DEBUG] file %s already exists in queue", file.Name)
 				case ErrNotFound:
 					e.log.Logf("[DEBUG] file %s not found in queue", file.Name)
-					e.queue.Add(file)
+					if err := e.queue.Add(file); err != nil {
+						e.log.Logf("[ERROR] failed to add file %s to queue: %v", file.Name, err)
+					}
 				default:
 					e.log.Logf("[ERROR] failed to check file %s in queue: %v", file.Name, err)
 				}
@@ -99,24 +100,16 @@ func (e *Engine) scanNewFiles(ctx context.Context, duration time.Duration, input
 
 // Данный метод запускает воркеры загрузки файлов
 func (e *Engine) downloadFiles(ctx context.Context, pc chan<- Progress, limit int) {
-	ch := e.queue.Chan(ctx, e.log, func(f File) error {
-		stat, err := os.Stat(f.Dest)
-		if os.IsNotExist(err) {
-			return nil
-		}
-
-		if f.Size != stat.Size() {
-			return nil
-		}
-
-		return err
-	})
+	ch := e.queue.Chan(ctx, e.log, nil)
 
 	limiter := make(chan struct{}, limit)
 
 	for {
 		select {
-		case file := <-ch:
+		case file, ok := <-ch:
+			if !ok {
+				return
+			}
 			// Try to acquire file lock
 			if !e.acquireFileLock(file.ID) {
 				e.log.Logf("[WARN] file %s is already being downloaded, skipping", file.Name)
@@ -131,7 +124,7 @@ func (e *Engine) downloadFiles(ctx context.Context, pc chan<- Progress, limit in
 					e.releaseFileLock(f.ID)
 				}()
 
-				err := e.filterTaskFromQueue(f.ID, f.Name, f.Dest, f.Size)
+				err := e.filterTaskFromQueue(f)
 				if err != nil {
 					return
 				}
@@ -218,19 +211,42 @@ func (e *Engine) releaseFileLock(fileID string) {
 	delete(e.fileLocks, fileID)
 }
 
-func (e *Engine) filterTaskFromQueue(fileid, filename, filepath string, filesize int64) error {
-	stat, err := os.Stat(filepath)
-	if err == nil {
-		if stat.Size() == filesize {
-			e.log.Logf("[WARN] filter task from queue: %s", filename)
-			err = e.queue.Delete(fileid)
-			if err != nil {
-				e.log.Logf("[ERROR] failed to delete file %s from queue: %v", filename, err)
-			}
-
-			return errors.New("file is already downloaded")
-		}
+func (e *Engine) filterTaskFromQueue(file File) error {
+	localPath, err := e.findLocalFile(file)
+	if errors.Is(err, ErrLocalFileNotFound) {
+		return nil
+	}
+	if err != nil {
+		e.log.Logf("[ERROR] failed to check local copy of %s before download: %v", file.Name, err)
+		return err
 	}
 
-	return nil
+	e.log.Logf("[INFO] removing queued file %s because it exists locally at %s", file.Name, localPath)
+	if err := e.queue.Delete(file.ID); err != nil {
+		e.log.Logf("[ERROR] failed to delete file %s from queue: %v", file.Name, err)
+		return err
+	}
+
+	return errors.New("file already exists locally")
+}
+
+func (e *Engine) findLocalFile(file File) (string, error) {
+	stat, err := os.Stat(file.Dest)
+	if err == nil {
+		if stat.Mode().IsRegular() && stat.Size() == file.Size {
+			return file.Dest, nil
+		}
+	} else if !os.IsNotExist(err) {
+		return "", fmt.Errorf("stat destination %q: %w", file.Dest, err)
+	}
+
+	if e.existingFiles == nil {
+		return "", ErrLocalFileNotFound
+	}
+
+	path, err := e.existingFiles.Find(file.Name, file.Size)
+	if err != nil {
+		return "", err
+	}
+	return path, nil
 }
