@@ -13,7 +13,10 @@ import (
 	"github.com/go-pkgz/lgr"
 )
 
-var ErrNotFound = errors.New("file not found")
+var (
+	ErrNotFound          = errors.New("file not found")
+	ErrLocalFileNotFound = errors.New("local file not found")
+)
 
 type Config struct {
 	// Путь к директории из которой будут скачиваться файлы
@@ -45,6 +48,15 @@ type Scanner interface {
 type Downloader interface {
 	Download(pch chan<- Progress, file File) error
 	Delete(file File) error
+}
+
+// ExistingFileFinder locates an already available local copy by its exact,
+// case-sensitive base name and size. Implementations must return a path whose
+// metadata has been verified at lookup time. If several paths match, any one
+// currently valid path may be returned. Engine treats a nil finder as disabled,
+// preserving destination-only checks when no additional libraries are set.
+type ExistingFileFinder interface {
+	Find(name string, size int64) (string, error)
 }
 
 type Queue interface {
