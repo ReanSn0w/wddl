@@ -10,8 +10,8 @@ services:
       WEBDAV_PASSWORD: "${WEBDAV_PASSWORD:?set WEBDAV_PASSWORD in the Synology project environment}"
     volumes:
       - ./config.yaml:/config/config.yaml:ro
-      - /volume1/wddl/download:/data/download
-      - /volume1/wddl/tmp:/data/tmp
-      - /volume1/wddl/state:/data/state
+      - /volume1/wddl/download:/data/download:rw
+      - /volume1/wddl/tmp:/data/tmp:rw
+      - /volume1/wddl/state:/data/state:rw
       - /volume1/video/movies:/libraries/movies:ro
       - /volume1/video/archive:/libraries/archive:ro
