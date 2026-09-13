@@ -6,10 +6,11 @@ require (
 	git.papkovda.ru/library/gokit v0.1.3
 	github.com/go-pkgz/lgr v0.11.1
 	github.com/studio-b12/gowebdav v0.9.0
+	github.com/umputun/go-flags v1.5.1
+	gopkg.in/yaml.v3 v3.0.1
 )
 
 require (
-	github.com/umputun/go-flags v1.5.1 // indirect
 	golang.org/x/net v0.30.0 // indirect
 	golang.org/x/sys v0.39.0 // indirect
 	golang.org/x/term v0.25.0 // indirect

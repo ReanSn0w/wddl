@@ -10,22 +10,16 @@ RUN apk --no-cache add ca-certificates
 RUN \
     revision=${TAG} && \
     echo "Building container. Revision: ${revision}" && \
-    go build -ldflags "-X main.revision=${revision}" -o /srv/app ./cmd/webdav/main.go
+    go build -ldflags "-X main.revision=${revision}" -o /srv/app ./cmd/webdav
 
 # Финальная сборка образа
 FROM scratch
 COPY --from=application /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
 COPY --from=application /srv /srv
 
-ENV WEBDAV_SERVER=https://dav.yandex.ru
-ENV WEBDAV_USER=guest
-ENV WEBDAV_PASSWORD=guest
-ENV INPUT=/
-ENV TEMP=./tmp
-ENV OUTPUT=./data
-ENV THREADS=4
-ENV TIMEOUT=600
-ENV QUEUE_FILE=/data/queue.json
+ENV WDDL_CONFIG=/config/config.yaml
+ENV WEBDAV_USER=""
+ENV WEBDAV_PASSWORD=""
 VOLUME [ "/data" ]
 
 WORKDIR /srv
