@@ -32,5 +32,6 @@ ENV WDDL_CONFIG=/config/config.yaml
 
 WORKDIR /var/lib/wddl
 USER wddl:wddl
+HEALTHCHECK --interval=1m --timeout=10s --start-period=15m --retries=3 CMD ["wddl", "status", "--json"]
 ENTRYPOINT ["wddl"]
 CMD ["run"]
