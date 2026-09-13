@@ -2,15 +2,21 @@
 package localindex
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 
 	"github.com/ReanSn0w/wddl/pkg/engine"
 )
+
+type logger interface {
+	Logf(format string, args ...interface{})
+}
 
 type fileKey struct {
 	name string
@@ -82,6 +88,28 @@ func (i *Index) Len() int {
 	i.mu.RLock()
 	defer i.mu.RUnlock()
 	return i.fileCount
+}
+
+// Run periodically replaces the active snapshot until ctx is cancelled.
+func (i *Index) Run(ctx context.Context, log logger, interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			started := time.Now()
+			log.Logf("[INFO] local library scan started")
+			count, err := i.Refresh()
+			if err != nil {
+				log.Logf("[ERROR] local library scan failed; keeping %d indexed files: %v", i.Len(), err)
+				continue
+			}
+			log.Logf("[INFO] local library scan completed: %d files in %v", count, time.Since(started).Round(time.Millisecond))
+		}
+	}
 }
 
 // Find returns a path that still has the exact case-sensitive base name and

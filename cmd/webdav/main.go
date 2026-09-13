@@ -11,6 +11,7 @@ import (
 	"git.papkovda.ru/library/gokit/pkg/app"
 	"github.com/ReanSn0w/wddl/pkg/engine"
 	"github.com/ReanSn0w/wddl/pkg/files"
+	"github.com/ReanSn0w/wddl/pkg/localindex"
 	"github.com/ReanSn0w/wddl/pkg/queue"
 	"github.com/ReanSn0w/wddl/pkg/utils"
 	"github.com/studio-b12/gowebdav"
@@ -57,6 +58,21 @@ func main() {
 		os.Exit(2)
 	}
 
+	var existingFiles engine.ExistingFileFinder
+	if len(opts.ExistingRoots) > 0 {
+		index := localindex.New(opts.ExistingRoots)
+		started := time.Now()
+		app.Log().Logf("[INFO] initial local library scan started")
+		count, err := index.Refresh()
+		if err != nil {
+			app.Log().Logf("[ERROR] initial local library scan failed: %v", err)
+			os.Exit(2)
+		}
+		app.Log().Logf("[INFO] initial local library scan completed: %d files in %v", count, time.Since(started).Round(time.Millisecond))
+		existingFiles = index
+		go index.Run(app.Context(), app.Log(), opts.ExistingScanEvery)
+	}
+
 	{
 		config := engine.Config{
 			InputPath:    opts.Input,
@@ -94,7 +110,7 @@ func main() {
 
 			files := files.New(wd)
 
-			engine := engine.New(app.Log(), config, files, files, queue)
+			engine := engine.New(app.Log(), config, files, files, queue, existingFiles)
 			engine.Start(app.Context())
 		}
 	}

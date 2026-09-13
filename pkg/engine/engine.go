@@ -10,26 +10,28 @@ import (
 	"github.com/go-pkgz/lgr"
 )
 
-func New(log lgr.L, conf Config, scanner Scanner, downloader Downloader, queue Queue) *Engine {
+func New(log lgr.L, conf Config, scanner Scanner, downloader Downloader, queue Queue, existingFiles ExistingFileFinder) *Engine {
 	return &Engine{
-		log:        log,
-		config:     conf,
-		queue:      queue,
-		scanner:    scanner,
-		downloader: downloader,
-		fileLocks:  make(map[string]bool),
-		lockMutex:  &sync.Mutex{},
+		log:           log,
+		config:        conf,
+		queue:         queue,
+		scanner:       scanner,
+		downloader:    downloader,
+		existingFiles: existingFiles,
+		fileLocks:     make(map[string]bool),
+		lockMutex:     &sync.Mutex{},
 	}
 }
 
 type Engine struct {
-	log        lgr.L
-	config     Config
-	queue      Queue
-	scanner    Scanner
-	downloader Downloader
-	fileLocks  map[string]bool // Track locked files
-	lockMutex  *sync.Mutex     // Protect fileLocks map
+	log           lgr.L
+	config        Config
+	queue         Queue
+	scanner       Scanner
+	downloader    Downloader
+	existingFiles ExistingFileFinder
+	fileLocks     map[string]bool // Track locked files
+	lockMutex     *sync.Mutex     // Protect fileLocks map
 }
 
 func (e *Engine) Start(ctx context.Context) {
