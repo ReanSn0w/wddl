@@ -82,7 +82,7 @@ func runDaemon(ctx context.Context, configPath string, getenv func(string) strin
 	}
 	storage := files.New(wd)
 	downloader := engine.New(log, toEngineConfig(conf), storage, storage, tasks, existingFiles)
-	service := daemon.New(conf, revision, log, downloader, tasks, index)
+	service := daemon.New(conf, revision, log, downloader, tasks, index, wd)
 	return service.Run(ctx)
 }
 

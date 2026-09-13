@@ -6,6 +6,8 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"os"
+	"path"
 	"sort"
 	"strings"
 	"sync"
@@ -31,6 +33,12 @@ type logger interface {
 	Logf(string, ...interface{})
 }
 
+type remoteStore interface {
+	Stat(string) (os.FileInfo, error)
+	ReadDir(string) ([]os.FileInfo, error)
+	Remove(string) error
+}
+
 type Daemon struct {
 	mu       sync.RWMutex
 	config   config.Config
@@ -50,13 +58,15 @@ type Daemon struct {
 	remote   control.ScanState
 	local    control.ScanState
 	broker   *control.Broker
+	remoteFS remoteStore
 }
 
-func New(conf config.Config, revision string, log logger, downloader *engine.Engine, tasks queueView, index localIndex) *Daemon {
+func New(conf config.Config, revision string, log logger, downloader *engine.Engine, tasks queueView, index localIndex, remote remoteStore) *Daemon {
 	daemon := &Daemon{
 		config: conf, revision: revision, log: log, engine: downloader, queue: tasks, index: index,
 		remoteCH: make(chan struct{}, 1), localCH: make(chan struct{}, 1), allCH: make(chan struct{}, 1),
-		broker: control.NewBroker(),
+		broker:   control.NewBroker(),
+		remoteFS: remote,
 	}
 	downloader.SetEventSink(func(eventType string, file engine.File, data any) {
 		daemon.broker.Publish(control.Event{Type: eventType, ID: file.ID, Message: file.Name, Data: data})
@@ -378,8 +388,23 @@ func (d *Daemon) CancelDownload(prefix string) (control.QueueItem, error) {
 	}
 	return queueItem(file), nil
 }
-func (d *Daemon) ResolveRemoteID(string) (control.RemoteID, error) {
-	return control.RemoteID{}, unavailable("remote ID lookup")
+func (d *Daemon) ResolveRemoteID(remotePath string) (control.RemoteID, error) {
+	normalized, err := normalizeRemotePath(d.config.WebDAV.Root, remotePath)
+	if err != nil {
+		return control.RemoteID{}, err
+	}
+	info, err := d.remoteFS.Stat(normalized)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return control.RemoteID{}, &control.APIError{Status: http.StatusNotFound, Code: control.CodeNotFound, Message: "remote path was not found"}
+		}
+		return control.RemoteID{}, fmt.Errorf("stat remote path: %w", err)
+	}
+	if info.IsDir() {
+		return control.RemoteID{}, &control.APIError{Status: http.StatusBadRequest, Code: control.CodeInvalidRequest, Message: "remote path is a directory"}
+	}
+	file := engine.NewFile(engine.Config{InputPath: d.config.WebDAV.Root, OutputPath: d.config.Download.Destination, TempPath: d.config.Download.Temp}, normalized, info.Size())
+	return control.RemoteID{Type: "remote_file", Path: normalized, Name: info.Name(), Size: info.Size(), ID: file.ID}, nil
 }
 func (d *Daemon) CleanupPreview() (control.CleanupPreview, error) {
 	return control.CleanupPreview{}, unavailable("remote cleanup")
@@ -415,4 +440,20 @@ func (d *Daemon) resolveTask(prefix string) (engine.File, error) {
 
 func queueItem(file engine.File) control.QueueItem {
 	return control.QueueItem{ID: file.ID, Name: file.Name, Source: file.Source, Dest: file.Dest, Size: file.Size, State: string(file.State)}
+}
+
+func normalizeRemotePath(root, value string) (string, error) {
+	value = strings.TrimSpace(value)
+	if value == "" || strings.Contains(value, `\`) {
+		return "", &control.APIError{Status: http.StatusBadRequest, Code: control.CodeInvalidRequest, Message: "a WebDAV path using '/' separators is required"}
+	}
+	root = path.Clean(root)
+	result := path.Clean(value)
+	if !path.IsAbs(value) {
+		result = path.Join(root, value)
+	}
+	if result != root && !strings.HasPrefix(result, strings.TrimSuffix(root, "/")+"/") {
+		return "", &control.APIError{Status: http.StatusBadRequest, Code: control.CodeInvalidRequest, Message: "remote path is outside webdav.root"}
+	}
+	return result, nil
 }
