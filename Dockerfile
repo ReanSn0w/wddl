@@ -10,7 +10,7 @@ RUN apk --no-cache add ca-certificates
 RUN \
     revision=${TAG} && \
     echo "Building container. Revision: ${revision}" && \
-    go build -ldflags "-X main.revision=${revision}" -o /srv/app ./cmd/webdav/main.go
+    go build -ldflags "-X main.revision=${revision}" -o /srv/app ./cmd/webdav
 
 # Финальная сборка образа
 FROM scratch
