@@ -3,33 +3,35 @@ package engine
 import (
 	"context"
 	"errors"
-	"os"
+	"fmt"
 	"sync"
 	"time"
 
 	"github.com/go-pkgz/lgr"
 )
 
-func New(log lgr.L, conf Config, scanner Scanner, downloader Downloader, queue Queue) *Engine {
+func New(log lgr.L, conf Config, scanner Scanner, downloader Downloader, queue Queue, existingFiles ExistingFileFinder) *Engine {
 	return &Engine{
-		log:        log,
-		config:     conf,
-		queue:      queue,
-		scanner:    scanner,
-		downloader: downloader,
-		fileLocks:  make(map[string]bool),
-		lockMutex:  &sync.Mutex{},
+		log:           log,
+		config:        conf,
+		queue:         queue,
+		scanner:       scanner,
+		downloader:    downloader,
+		existingFiles: existingFiles,
+		fileLocks:     make(map[string]bool),
+		lockMutex:     &sync.Mutex{},
 	}
 }
 
 type Engine struct {
-	log        lgr.L
-	config     Config
-	queue      Queue
-	scanner    Scanner
-	downloader Downloader
-	fileLocks  map[string]bool // Track locked files
-	lockMutex  *sync.Mutex     // Protect fileLocks map
+	log           lgr.L
+	config        Config
+	queue         Queue
+	scanner       Scanner
+	downloader    Downloader
+	existingFiles ExistingFileFinder
+	fileLocks     map[string]bool // Track locked files
+	lockMutex     *sync.Mutex     // Protect fileLocks map
 }
 
 func (e *Engine) Start(ctx context.Context) {
@@ -48,6 +50,7 @@ func (e *Engine) Start(ctx context.Context) {
 // Данный метод переодически запускает сканирование новых файлов в удаленном хранилище
 func (e *Engine) scanNewFiles(ctx context.Context, duration time.Duration, inputPath string) {
 	ticker := time.NewTicker(duration)
+	defer ticker.Stop()
 	e.log.Logf("[DEBUG] scan loop started")
 
 	for {
@@ -56,38 +59,8 @@ func (e *Engine) scanNewFiles(ctx context.Context, duration time.Duration, input
 			return
 		case <-ticker.C:
 			e.log.Logf("[DEBUG] scan started")
-
-			files, err := e.scanner.Scan(e.config, inputPath)
-			if err != nil {
+			if err := e.scanNewFilesOnce(inputPath); err != nil {
 				e.log.Logf("[ERROR] failed to scan files: %v", err)
-				continue
-			}
-
-			e.log.Logf("[DEBUG] scanning completed: %d files found", len(files))
-
-			for _, file := range files {
-				stat, err := os.Stat(file.Dest)
-				if err != nil && !os.IsNotExist(err) {
-					e.log.Logf("[ERROR] failed to stat file %s: %v", file.Name, err)
-					continue
-				}
-
-				if stat != nil {
-					if stat.Size() == file.Size {
-						continue
-					}
-				}
-
-				err = e.queue.Exists(file.ID)
-				switch err {
-				case nil:
-					e.log.Logf("[DEBUG] file %s already exists in queue", file.Name)
-				case ErrNotFound:
-					e.log.Logf("[DEBUG] file %s not found in queue", file.Name)
-					e.queue.Add(file)
-				default:
-					e.log.Logf("[ERROR] failed to check file %s in queue: %v", file.Name, err)
-				}
 			}
 		default:
 			time.Sleep(time.Millisecond * 100)
@@ -95,26 +68,58 @@ func (e *Engine) scanNewFiles(ctx context.Context, duration time.Duration, input
 	}
 }
 
+func (e *Engine) scanNewFilesOnce(inputPath string) error {
+	files, err := e.scanner.Scan(e.config, inputPath)
+	if err != nil {
+		return err
+	}
+
+	e.log.Logf("[DEBUG] scanning completed: %d files found", len(files))
+	for _, file := range files {
+		localPath, err := e.findLocalFile(file)
+		switch {
+		case err == nil:
+			e.log.Logf("[INFO] file %s already exists locally at %s", file.Name, localPath)
+			if e.config.RemoveRemote {
+				if err := e.deleteRemoteIfConfirmed(file); err != nil {
+					e.log.Logf("[ERROR] failed to delete confirmed remote file %s: %v", file.Name, err)
+				}
+			}
+			continue
+		case !errors.Is(err, ErrLocalFileNotFound):
+			e.log.Logf("[ERROR] failed to check local copy of %s: %v", file.Name, err)
+			continue
+		}
+
+		err = e.queue.Exists(file.ID)
+		switch err {
+		case nil:
+			e.log.Logf("[DEBUG] file %s already exists in queue", file.Name)
+		case ErrNotFound:
+			e.log.Logf("[DEBUG] file %s not found in queue", file.Name)
+			if err := e.queue.Add(file); err != nil {
+				e.log.Logf("[ERROR] failed to add file %s to queue: %v", file.Name, err)
+			}
+		default:
+			e.log.Logf("[ERROR] failed to check file %s in queue: %v", file.Name, err)
+		}
+	}
+
+	return nil
+}
+
 // Данный метод запускает воркеры загрузки файлов
 func (e *Engine) downloadFiles(ctx context.Context, pc chan<- Progress, limit int) {
-	ch := e.queue.Chan(ctx, e.log, func(f File) error {
-		stat, err := os.Stat(f.Dest)
-		if os.IsNotExist(err) {
-			return nil
-		}
-
-		if f.Size != stat.Size() {
-			return nil
-		}
-
-		return err
-	})
+	ch := e.queue.Chan(ctx, e.log, nil)
 
 	limiter := make(chan struct{}, limit)
 
 	for {
 		select {
-		case file := <-ch:
+		case file, ok := <-ch:
+			if !ok {
+				return
+			}
 			// Try to acquire file lock
 			if !e.acquireFileLock(file.ID) {
 				e.log.Logf("[WARN] file %s is already being downloaded, skipping", file.Name)
@@ -129,7 +134,7 @@ func (e *Engine) downloadFiles(ctx context.Context, pc chan<- Progress, limit in
 					e.releaseFileLock(f.ID)
 				}()
 
-				err := e.filterTaskFromQueue(f.ID, f.Name, f.Dest, f.Size)
+				err := e.filterTaskFromQueue(f)
 				if err != nil {
 					return
 				}
@@ -147,9 +152,8 @@ func (e *Engine) downloadFiles(ctx context.Context, pc chan<- Progress, limit in
 					}
 
 					if e.config.RemoveRemote {
-						err = e.downloader.Delete(f)
-						if err != nil {
-							e.log.Logf("[ERROR] failed to delete remote file %s from downloader: %v", f.Name, err)
+						if err := e.deleteRemoteIfConfirmed(f); err != nil {
+							e.log.Logf("[ERROR] failed to delete confirmed remote file %s: %v", f.Name, err)
 						}
 					}
 				}
@@ -216,19 +220,44 @@ func (e *Engine) releaseFileLock(fileID string) {
 	delete(e.fileLocks, fileID)
 }
 
-func (e *Engine) filterTaskFromQueue(fileid, filename, filepath string, filesize int64) error {
-	stat, err := os.Stat(filepath)
-	if err == nil {
-		if stat.Size() == filesize {
-			e.log.Logf("[WARN] filter task from queue: %s", filename)
-			err = e.queue.Delete(fileid)
-			if err != nil {
-				e.log.Logf("[ERROR] failed to delete file %s from queue: %v", filename, err)
-			}
+func (e *Engine) filterTaskFromQueue(file File) error {
+	localPath, err := e.findLocalFile(file)
+	if errors.Is(err, ErrLocalFileNotFound) {
+		return nil
+	}
+	if err != nil {
+		e.log.Logf("[ERROR] failed to check local copy of %s before download: %v", file.Name, err)
+		return err
+	}
 
-			return errors.New("file is already downloaded")
+	e.log.Logf("[INFO] removing queued file %s because it exists locally at %s", file.Name, localPath)
+	if err := e.queue.Delete(file.ID); err != nil {
+		e.log.Logf("[ERROR] failed to delete file %s from queue: %v", file.Name, err)
+		return err
+	}
+	if e.config.RemoveRemote {
+		if err := e.deleteRemoteIfConfirmed(file); err != nil {
+			e.log.Logf("[ERROR] failed to delete confirmed remote file %s: %v", file.Name, err)
 		}
 	}
 
+	return errors.New("file already exists locally")
+}
+
+func (e *Engine) findLocalFile(file File) (string, error) {
+	return FindLocalCopy(file, e.existingFiles)
+}
+
+func (e *Engine) deleteRemoteIfConfirmed(file File) error {
+	if _, err := e.findLocalFile(file); err != nil {
+		if errors.Is(err, ErrLocalFileNotFound) {
+			return errors.New("local copy is no longer available")
+		}
+		return fmt.Errorf("revalidate local copy: %w", err)
+	}
+
+	if err := e.downloader.Delete(file); err != nil {
+		return fmt.Errorf("delete remote file: %w", err)
+	}
 	return nil
 }
