@@ -37,9 +37,6 @@ type Engine struct {
 func (e *Engine) Start(ctx context.Context) {
 	progressCH := make(chan Progress, e.config.Concurrency)
 
-	// Запуск рутины для добавления новых файлов в очередь загрузки
-	go e.scanNewFiles(ctx, e.config.ScanEvery, e.config.InputPath)
-
 	// Запуск воркеров для загрузки файлов
 	go e.downloadFiles(ctx, progressCH, e.config.Concurrency)
 
@@ -51,30 +48,6 @@ func (e *Engine) Start(ctx context.Context) {
 // this method as the single entry point for both scheduled and manual scans.
 func (e *Engine) ScanNow() error {
 	return e.scanNewFilesOnce(e.config.InputPath)
-}
-
-// Данный метод переодически запускает сканирование новых файлов в удаленном хранилище
-func (e *Engine) scanNewFiles(ctx context.Context, duration time.Duration, inputPath string) {
-	ticker := time.NewTicker(duration)
-	defer ticker.Stop()
-	e.log.Logf("[DEBUG] scan loop started")
-	if err := e.scanNewFilesOnce(inputPath); err != nil {
-		e.log.Logf("[ERROR] initial scan failed: %v", err)
-	}
-
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			e.log.Logf("[DEBUG] scan started")
-			if err := e.scanNewFilesOnce(inputPath); err != nil {
-				e.log.Logf("[ERROR] failed to scan files: %v", err)
-			}
-		default:
-			time.Sleep(time.Millisecond * 100)
-		}
-	}
 }
 
 func (e *Engine) scanNewFilesOnce(inputPath string) error {
