@@ -44,17 +44,12 @@ func executeCommand(ctx context.Context, parsed parsedCLI, out io.Writer, getenv
 		}
 		return printValue(out, parsed.Options.Status.JSON, value, formatStatus)
 	case "watch":
-		return client.Watch(ctx, func(event control.Event) error {
-			if parsed.Options.Watch.JSON {
+		if parsed.Options.Watch.JSON {
+			return client.Watch(ctx, func(event control.Event) error {
 				return json.NewEncoder(out).Encode(event)
-			}
-			_, err := fmt.Fprintf(out, "%s %-20s %s", event.Time.Format(time.RFC3339), event.Type, event.Message)
-			if event.Dropped > 0 {
-				_, _ = fmt.Fprintf(out, " (dropped %d)", event.Dropped)
-			}
-			_, _ = fmt.Fprintln(out)
-			return err
-		})
+			})
+		}
+		return runPlainWatch(ctx, client, out)
 	case "scan remote", "scan local", "scan all":
 		kind := control.ScanKind(parsed.Command[len("scan "):])
 		value, err := client.Scan(ctx, kind)
