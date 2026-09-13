@@ -47,9 +47,7 @@ func executeCommand(ctx context.Context, parsed parsedCLI, out io.Writer, getenv
 		terminal, width := watchTerminal(out)
 		switch selectWatchOutputMode(parsed.Options.Watch, terminal, getenv("TERM")) {
 		case watchOutputJSON:
-			return normalizeWatchResult(ctx, client.Watch(ctx, func(event control.Event) error {
-				return json.NewEncoder(out).Encode(event)
-			}))
+			return normalizeWatchResult(ctx, runJSONWatch(ctx, client, out))
 		case watchOutputInteractive:
 			return runInteractiveWatch(ctx, client, newANSIWatchRenderer(out, width))
 		default:

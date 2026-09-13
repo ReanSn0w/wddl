@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -21,6 +22,12 @@ func normalizeWatchResult(ctx context.Context, err error) error {
 type watchClient interface {
 	Status(context.Context) (control.Status, error)
 	Watch(context.Context, func(control.Event) error) error
+}
+
+func runJSONWatch(ctx context.Context, client watchClient, out io.Writer) error {
+	return client.Watch(ctx, func(event control.Event) error {
+		return json.NewEncoder(out).Encode(event)
+	})
 }
 
 func runPlainWatch(ctx context.Context, client watchClient, out io.Writer) error {

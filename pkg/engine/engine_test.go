@@ -160,6 +160,22 @@ func TestCancelDownloadSuspendsTask(t *testing.T) {
 	t.Fatal("cancelled task was not suspended")
 }
 
+func TestUpdateProgressUsesExactDownloadedBytes(t *testing.T) {
+	downloaderEngine := New(lgr.New(), Config{}, fakeScanner{}, &fakeDownloader{}, newFakeQueue(), nil)
+	file := File{ID: "id", Name: "movie.mkv", Size: 100}
+	downloaderEngine.beginActive(file, func() {})
+	downloaderEngine.updateProgress(Progress{ID: file.ID, Downloaded: 37, Size: 100, Percent: 37, Speed: 12})
+
+	active := downloaderEngine.ActiveDownloads()
+	if len(active) != 1 || active[0].Downloaded != 37 || active[0].Percent != 37 || active[0].Speed != 12 {
+		t.Fatalf("active = %#v", active)
+	}
+	downloaderEngine.updateProgress(Progress{ID: file.ID, Downloaded: 101, Size: 100, Percent: 100, Speed: 12})
+	if got := downloaderEngine.ActiveDownloads()[0].Downloaded; got != 100 {
+		t.Fatalf("Downloaded = %d, want 100", got)
+	}
+}
+
 func localMatch(t *testing.T) (File, ExistingFileFinder) {
 	t.Helper()
 	dir := t.TempDir()

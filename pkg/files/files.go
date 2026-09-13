@@ -29,6 +29,7 @@ func New(client Webdav) *Files {
 		client:        client,
 		now:           time.Now,
 		progressEvery: time.Second,
+		sleep:         wait,
 	}
 }
 
@@ -36,6 +37,7 @@ type Files struct {
 	client        Webdav
 	now           func() time.Time
 	progressEvery time.Duration
+	sleep         func(context.Context, time.Duration) error
 }
 
 func (f *Files) Scan(conf engine.Config, inputDir string) ([]engine.File, error) {
@@ -65,7 +67,11 @@ func (d *Files) Download(ctx context.Context, pch chan<- engine.Progress, file e
 	var lastErr error
 
 	lgr.Default().Logf("[DEBUG] download delay before starting (3 seconds)")
-	if err := wait(ctx, time.Second*3); err != nil {
+	sleep := d.sleep
+	if sleep == nil {
+		sleep = wait
+	}
+	if err := sleep(ctx, time.Second*3); err != nil {
 		return err
 	}
 
@@ -81,7 +87,7 @@ func (d *Files) Download(ctx context.Context, pch chan<- engine.Progress, file e
 			backoff := time.Duration(math.Pow(2, float64(attempt+1))) * time.Second
 			lgr.Default().Logf("[WARN] download attempt %d/%d failed for %s, retry in %v: %v",
 				attempt+1, maxRetries, file.ID, backoff, err)
-			if err := wait(ctx, backoff); err != nil {
+			if err := sleep(ctx, backoff); err != nil {
 				return err
 			}
 		}
