@@ -36,6 +36,9 @@ func Load(path string) (Config, error) {
 		}
 		return Config{}, fmt.Errorf("decode trailing config data %q: %w", path, err)
 	}
+	if err := result.Validate(); err != nil {
+		return Config{}, fmt.Errorf("validate config %q: %w", path, err)
+	}
 
 	return result, nil
 }
