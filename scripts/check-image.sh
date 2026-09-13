@@ -6,6 +6,12 @@ image=${1:-wddl:test}
 docker run --rm "$image" version
 docker run --rm "$image" --help >/dev/null
 docker run --rm --workdir /tmp "$image" version >/dev/null
+healthcheck=$(docker image inspect "$image" --format '{{json .Config.Healthcheck.Test}}')
+test "$healthcheck" = '["CMD","wddl","status","--json"]'
+runtime_env=$(docker image inspect "$image" --format '{{json .Config.Env}}')
+case "$runtime_env" in
+  *WEBDAV_USER*|*WEBDAV_PASSWORD*) exit 1 ;;
+esac
 docker run --rm --entrypoint /bin/sh "$image" -c '
   command -v wddl >/dev/null
   command -v busybox >/dev/null
