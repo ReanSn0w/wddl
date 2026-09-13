@@ -10,6 +10,7 @@ import (
 	"syscall"
 
 	"github.com/ReanSn0w/wddl/pkg/config"
+	"github.com/ReanSn0w/wddl/pkg/daemon"
 	"github.com/ReanSn0w/wddl/pkg/engine"
 	"github.com/ReanSn0w/wddl/pkg/files"
 	"github.com/ReanSn0w/wddl/pkg/localindex"
@@ -65,16 +66,10 @@ func runDaemon(ctx context.Context, configPath string, getenv func(string) strin
 	if err := validateRoots(conf.ExistingFiles.Roots); err != nil {
 		return fmt.Errorf("existing files configuration: %w", err)
 	}
+	index := localindex.New(conf.ExistingFiles.Roots)
 	var existingFiles engine.ExistingFileFinder
 	if len(conf.ExistingFiles.Roots) > 0 {
-		index := localindex.New(conf.ExistingFiles.Roots)
-		count, err := index.Refresh()
-		if err != nil {
-			return fmt.Errorf("initial local library scan: %w", err)
-		}
-		log.Logf("[INFO] initial local library scan completed: %d files", count)
 		existingFiles = index
-		go index.Run(ctx, log, conf.ExistingFiles.ScanEvery.Value())
 	}
 
 	wd := gowebdav.NewClient(conf.WebDAV.Server, credentials.User, credentials.Password)
@@ -87,9 +82,8 @@ func runDaemon(ctx context.Context, configPath string, getenv func(string) strin
 	}
 	storage := files.New(wd)
 	downloader := engine.New(log, toEngineConfig(conf), storage, storage, tasks, existingFiles)
-	downloader.Start(ctx)
-	<-ctx.Done()
-	return nil
+	service := daemon.New(conf, revision, log, downloader, tasks, index)
+	return service.Run(ctx)
 }
 
 func configureLogger(debug bool) lgr.L {

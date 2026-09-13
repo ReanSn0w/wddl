@@ -47,11 +47,20 @@ func (e *Engine) Start(ctx context.Context) {
 	go e.progressPrinter(ctx, progressCH)
 }
 
+// ScanNow performs one synchronous remote scan. Long-lived callers should use
+// this method as the single entry point for both scheduled and manual scans.
+func (e *Engine) ScanNow() error {
+	return e.scanNewFilesOnce(e.config.InputPath)
+}
+
 // Данный метод переодически запускает сканирование новых файлов в удаленном хранилище
 func (e *Engine) scanNewFiles(ctx context.Context, duration time.Duration, inputPath string) {
 	ticker := time.NewTicker(duration)
 	defer ticker.Stop()
 	e.log.Logf("[DEBUG] scan loop started")
+	if err := e.scanNewFilesOnce(inputPath); err != nil {
+		e.log.Logf("[ERROR] initial scan failed: %v", err)
+	}
 
 	for {
 		select {
