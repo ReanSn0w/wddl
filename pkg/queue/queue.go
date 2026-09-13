@@ -65,11 +65,9 @@ func (q *Queue) Len() (int, error) {
 
 // Stat - возвращает статистику состояния очереди
 func (q *Queue) Stat() (*engine.Stat, error) {
-	q.mx.RLock()
-	defer q.mx.RUnlock()
-
-	stat := &engine.Stat{Files: len(q.items)}
-	for _, file := range q.items {
+	items := q.snapshot()
+	stat := &engine.Stat{Files: len(items)}
+	for _, file := range items {
 		stat.FullSize += file.Size
 	}
 
@@ -79,11 +77,9 @@ func (q *Queue) Stat() (*engine.Stat, error) {
 // List - возвращает список файлов из очереди
 // в случае случае их отсутсвия возвращает (nil, nil)
 func (q *Queue) List(filter func(f engine.File) error) ([]engine.File, error) {
-	q.mx.RLock()
-	defer q.mx.RUnlock()
-
-	result := make([]engine.File, 0, len(q.items))
-	for _, file := range q.items {
+	items := q.snapshot()
+	result := make([]engine.File, 0, len(items))
+	for _, file := range items {
 		if filter != nil {
 			if err := filter(file); err != nil {
 				continue
@@ -94,6 +90,13 @@ func (q *Queue) List(filter func(f engine.File) error) ([]engine.File, error) {
 	}
 
 	return result, nil
+}
+
+func (q *Queue) snapshot() map[string]engine.File {
+	q.mx.RLock()
+	defer q.mx.RUnlock()
+
+	return cloneItems(q.items)
 }
 
 // Chan - возвращает канал с файлами из очереди
