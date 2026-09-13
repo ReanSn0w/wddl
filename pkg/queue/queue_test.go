@@ -548,6 +548,7 @@ func testFile(id string, size int64) engine.File {
 		Temp:   "/tmp/" + id,
 		Dest:   "/downloads/" + id + ".mkv",
 		Size:   size,
+		State:  engine.TaskReady,
 	}
 }
 
@@ -559,6 +560,7 @@ func persistedFromEngine(file engine.File) persistedFile {
 		Temp:   file.Temp,
 		Dest:   file.Dest,
 		Size:   file.Size,
+		State:  string(file.State),
 	}
 }
 

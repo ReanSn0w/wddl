@@ -43,6 +43,9 @@ type Queue struct {
 
 // Add - добавляет файл в очередь
 func (q *Queue) Add(file engine.File) error {
+	if file.State == "" {
+		file.State = engine.TaskReady
+	}
 	if err := validateFile(file); err != nil {
 		return fmt.Errorf("validate queue item: %w", err)
 	}
@@ -124,6 +127,30 @@ func (q *Queue) List(filter func(f engine.File) error) ([]engine.File, error) {
 	return result, nil
 }
 
+func (q *Queue) SetState(id string, state engine.TaskState) (engine.File, error) {
+	if state != engine.TaskReady && state != engine.TaskSuspended {
+		return engine.File{}, fmt.Errorf("invalid task state %q", state)
+	}
+	q.mx.Lock()
+	file, ok := q.items[id]
+	if !ok {
+		q.mx.Unlock()
+		return engine.File{}, engine.ErrNotFound
+	}
+	file.State = state
+	next := cloneItems(q.items)
+	next[id] = file
+	committed, err := q.writeSnapshot(q.path, next)
+	if committed {
+		q.items = next
+	}
+	q.mx.Unlock()
+	if committed {
+		q.notifyChanged()
+	}
+	return file, err
+}
+
 func (q *Queue) notifyChanged() {
 	select {
 	case q.changed <- struct{}{}:
@@ -151,7 +178,15 @@ func (q *Queue) Chan(ctx context.Context, log lgr.L, filter func(f engine.File) 
 		defer ticker.Stop()
 
 		emit := func() bool {
-			items, err := q.List(filter)
+			items, err := q.List(func(file engine.File) error {
+				if file.State != engine.TaskReady {
+					return engine.ErrNotFound
+				}
+				if filter != nil {
+					return filter(file)
+				}
+				return nil
+			})
 			if err != nil {
 				log.Logf("[ERROR] listing files: %v", err)
 				return true

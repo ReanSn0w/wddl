@@ -6,6 +6,8 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -21,6 +23,8 @@ type localIndex interface {
 
 type queueView interface {
 	List(func(engine.File) error) ([]engine.File, error)
+	Delete(string) error
+	SetState(string, engine.TaskState) (engine.File, error)
 }
 
 type logger interface {
@@ -119,7 +123,13 @@ func (d *Daemon) Status() control.Status {
 	}
 	if d.queue != nil {
 		items, _ := d.queue.List(nil)
-		status.Pending = len(items)
+		for _, item := range items {
+			if item.State == engine.TaskSuspended {
+				status.Suspended++
+			} else {
+				status.Pending++
+			}
+		}
 	}
 	for _, active := range d.engine.ActiveDownloads() {
 		item := control.ActiveDownload{
@@ -311,12 +321,48 @@ func (d *Daemon) scanFinished(kind control.ScanKind, err error) {
 	}
 	d.broker.Publish(event)
 }
-func (d *Daemon) QueueList() ([]control.QueueItem, error) { return nil, unavailable("queue control") }
-func (d *Daemon) QueueRemove(string) (control.QueueItem, error) {
-	return control.QueueItem{}, unavailable("queue control")
+func (d *Daemon) QueueList() ([]control.QueueItem, error) {
+	files, err := d.queue.List(nil)
+	if err != nil {
+		return nil, err
+	}
+	result := make([]control.QueueItem, 0, len(files))
+	for _, file := range files {
+		result = append(result, queueItem(file))
+	}
+	sort.Slice(result, func(i, j int) bool { return result[i].ID < result[j].ID })
+	return result, nil
 }
-func (d *Daemon) QueueRetry(string) (control.QueueItem, error) {
-	return control.QueueItem{}, unavailable("queue control")
+func (d *Daemon) QueueRemove(prefix string) (control.QueueItem, error) {
+	file, err := d.resolveTask(prefix)
+	if err != nil {
+		return control.QueueItem{}, err
+	}
+	for _, active := range d.engine.ActiveDownloads() {
+		if active.ID == file.ID {
+			return control.QueueItem{}, &control.APIError{Status: http.StatusConflict, Code: control.CodeConflict, Message: "task is active; cancel the download first"}
+		}
+	}
+	if err := d.queue.Delete(file.ID); err != nil {
+		return control.QueueItem{}, err
+	}
+	d.broker.Publish(control.Event{Type: "queue.removed", ID: file.ID, Message: "task removed; a remote scan may add it again"})
+	return queueItem(file), nil
+}
+func (d *Daemon) QueueRetry(prefix string) (control.QueueItem, error) {
+	file, err := d.resolveTask(prefix)
+	if err != nil {
+		return control.QueueItem{}, err
+	}
+	if file.State != engine.TaskSuspended {
+		return control.QueueItem{}, &control.APIError{Status: http.StatusConflict, Code: control.CodeConflict, Message: "task is not suspended"}
+	}
+	file, err = d.queue.SetState(file.ID, engine.TaskReady)
+	if err != nil {
+		return control.QueueItem{}, err
+	}
+	d.broker.Publish(control.Event{Type: "download.resumed", ID: file.ID, Message: file.Name})
+	return queueItem(file), nil
 }
 func (d *Daemon) CancelDownload(string) (control.QueueItem, error) {
 	return control.QueueItem{}, unavailable("download cancellation")
@@ -335,3 +381,27 @@ func (d *Daemon) Reload(config.Config) (control.ReloadResult, error) {
 }
 
 var _ control.Service = (*Daemon)(nil)
+
+func (d *Daemon) resolveTask(prefix string) (engine.File, error) {
+	prefix = strings.TrimSpace(prefix)
+	files, err := d.queue.List(nil)
+	if err != nil {
+		return engine.File{}, err
+	}
+	var matches []engine.File
+	var ids []string
+	for _, file := range files {
+		if strings.HasPrefix(file.ID, prefix) {
+			matches = append(matches, file)
+			ids = append(ids, file.ID)
+		}
+	}
+	if len(matches) != 1 {
+		return engine.File{}, control.IDPrefixError(prefix, ids)
+	}
+	return matches[0], nil
+}
+
+func queueItem(file engine.File) control.QueueItem {
+	return control.QueueItem{ID: file.ID, Name: file.Name, Source: file.Source, Dest: file.Dest, Size: file.Size, State: string(file.State)}
+}

@@ -18,6 +18,13 @@ var (
 	ErrLocalFileNotFound = errors.New("local file not found")
 )
 
+type TaskState string
+
+const (
+	TaskReady     TaskState = "ready"
+	TaskSuspended TaskState = "suspended"
+)
+
 type Config struct {
 	// Путь к директории из которой будут скачиваться файлы
 	InputPath string
@@ -93,6 +100,7 @@ func NewFile(conf Config, source string, size int64) File {
 		Dest:   conf.OutputPath + strings.TrimPrefix(source, conf.InputPath),
 		Temp:   filepath.Join(conf.TempPath, fileID),
 		Size:   size,
+		State:  TaskReady,
 	}
 }
 
@@ -114,6 +122,9 @@ type File struct {
 
 	// Размер файла в байтах
 	Size int64
+
+	// State controls whether the scheduler may start the task.
+	State TaskState
 }
 
 type Progress struct {

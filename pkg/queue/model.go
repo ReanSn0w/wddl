@@ -20,6 +20,7 @@ type persistedFile struct {
 	Temp   string `json:"temp"`
 	Dest   string `json:"dest"`
 	Size   int64  `json:"size"`
+	State  string `json:"state"`
 }
 
 func newPersistedQueue(items map[string]engine.File) persistedQueue {
@@ -40,6 +41,7 @@ func newPersistedQueue(items map[string]engine.File) persistedQueue {
 			Temp:   file.Temp,
 			Dest:   file.Dest,
 			Size:   file.Size,
+			State:  string(file.State),
 		})
 	}
 
@@ -50,6 +52,10 @@ func newPersistedQueue(items map[string]engine.File) persistedQueue {
 }
 
 func (f persistedFile) engineFile() engine.File {
+	state := engine.TaskState(f.State)
+	if state == "" {
+		state = engine.TaskReady
+	}
 	return engine.File{
 		ID:     f.ID,
 		Name:   f.Name,
@@ -57,6 +63,7 @@ func (f persistedFile) engineFile() engine.File {
 		Temp:   f.Temp,
 		Dest:   f.Dest,
 		Size:   f.Size,
+		State:  state,
 	}
 }
 
