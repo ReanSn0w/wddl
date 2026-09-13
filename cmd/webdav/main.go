@@ -19,13 +19,7 @@ import (
 
 var (
 	revision = "unknown"
-	opts     = struct {
-		ConfigPath string `long:"config" env:"WDDL_CONFIG" default:"./config.yaml" description:"path to YAML configuration"`
-
-		Util struct {
-			ClearRemote bool `long:"clear-remote" env:"CLEAR_REMOTE" description:"clear remote files"`
-		} `group:"Утилиты" namespace:"util" env-namespace:"UTIL"`
-	}{}
+	opts     bootstrapOptions
 )
 
 func main() {
@@ -64,14 +58,7 @@ func main() {
 	}
 
 	{
-		engineConfig := engine.Config{
-			InputPath:    conf.WebDAV.Root,
-			OutputPath:   conf.Download.Destination,
-			TempPath:     conf.Download.Temp,
-			Concurrency:  conf.Download.Workers,
-			ScanEvery:    conf.Download.ScanEvery.Value(),
-			RemoveRemote: conf.Download.RemoveRemote,
-		}
+		engineConfig := toEngineConfig(conf)
 
 		wd := gowebdav.NewClient(conf.WebDAV.Server, credentials.User, credentials.Password)
 		err := wd.Connect()

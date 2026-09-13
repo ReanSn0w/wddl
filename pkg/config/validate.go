@@ -34,7 +34,7 @@ func (c *Config) Validate() error {
 	if err := cleanLocalPath("download.temp", &c.Download.Temp); err != nil {
 		return err
 	}
-	if c.Download.Destination == c.Download.Temp {
+	if filepath.Clean(c.Download.Destination) == filepath.Clean(c.Download.Temp) {
 		return fmt.Errorf("download.destination and download.temp: must be different paths")
 	}
 	if c.Download.Workers <= 0 {
@@ -60,7 +60,6 @@ func cleanLocalPath(field string, value *string) error {
 	if *value == "" {
 		return fmt.Errorf("%s: must not be empty", field)
 	}
-	*value = filepath.Clean(*value)
 	return nil
 }
 
