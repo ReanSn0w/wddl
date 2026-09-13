@@ -17,15 +17,9 @@ FROM scratch
 COPY --from=application /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
 COPY --from=application /srv /srv
 
-ENV WEBDAV_SERVER=https://dav.yandex.ru
-ENV WEBDAV_USER=guest
-ENV WEBDAV_PASSWORD=guest
-ENV INPUT=/
-ENV TEMP=./tmp
-ENV OUTPUT=./data
-ENV THREADS=4
-ENV TIMEOUT=600
-ENV QUEUE_FILE=/data/queue.json
+ENV WDDL_CONFIG=/config/config.yaml
+ENV WEBDAV_USER=""
+ENV WEBDAV_PASSWORD=""
 VOLUME [ "/data" ]
 
 WORKDIR /srv
