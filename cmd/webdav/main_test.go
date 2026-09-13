@@ -87,6 +87,17 @@ func TestCommandRequiredAndUnknownRejected(t *testing.T) {
 	}
 }
 
+func TestWatchOutputFlagsAreMutuallyExclusive(t *testing.T) {
+	if _, err := parseCLI([]string{"watch", "--json", "--plain"}); err == nil {
+		t.Fatal("parseCLI() accepted --json with --plain")
+	}
+	for _, args := range [][]string{{"watch", "--json"}, {"watch", "--plain"}} {
+		if _, err := parseCLI(args); err != nil {
+			t.Fatalf("parseCLI(%q) error = %v", args, err)
+		}
+	}
+}
+
 func TestLoadCredentials(t *testing.T) {
 	values := map[string]string{"WEBDAV_USER": "user", "WEBDAV_PASSWORD": "password"}
 	getenv := func(key string) string { return values[key] }
